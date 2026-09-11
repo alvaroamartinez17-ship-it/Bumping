@@ -117,7 +117,13 @@ no value. Roughly 1 row per second.
 
 `*.gpx` — the track, for anything that reads GPX.
 
-`*.json` — ride summary plus both streams in one file.
+`*.json` — everything in one file: `ride` (the summary, including `jumps` and `rough`),
+`gps` (array of fix objects), `accel` (array of rows matching `accelColumns`, with `null`
+where iOS gave no value) and a `units` block. This is the one to send if you want the data
+analysed somewhere else.
+
+Exports are built the moment you tap, because iOS only permits the share sheet inside a
+user gesture. If the sheet still says "Reading samples", wait a second and tap again.
 
 The roughness number is the RMS of |acceleration| after a slow high-pass, in g. Taking the
 magnitude makes it independent of how the phone is mounted, so two runs compare even if you

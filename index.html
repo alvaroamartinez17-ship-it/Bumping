@@ -700,7 +700,7 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.5";
+var VERSION = "1.6";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
@@ -1221,7 +1221,7 @@ function renderRides() {
 }
 
 /* ------------------------------------------------------------- detail */
-var openR = null, openPts = null;
+var openR = null, openPts = null, openChunks = null;
 
 function bySeq(a, b) { return a.k < b.k ? -1 : 1; }
 
@@ -1232,7 +1232,7 @@ function addCell(v, k) { $("sheetGrid").innerHTML += cellHtml(v, k); }
 
 function openRide(r) {
   try {
-    openR = r; openPts = null;
+    openR = r; openPts = null; openChunks = null;
     $("sheetTitle").textContent = dateLabel(r.startedAt);
     var cells = [
       [hms(r.dur || 0), "duration"],
@@ -1269,6 +1269,7 @@ function loadRide(r) {
   Promise.all([byRide("accel", r.id), byRide("gps", r.id)]).then(function (res) {
     if (!openR || openR.id !== r.id) return;          // sheet closed while loading
     var aChunks = res[0].sort(bySeq), gChunks = res[1].sort(bySeq);
+    openChunks = aChunks;
 
     var pts = [];
     gChunks.forEach(function (ch) { pts = pts.concat(ch.p); });
@@ -1314,7 +1315,10 @@ function loadRide(r) {
   });
 }
 
-$("sheetBack").onclick = function () { $("sheet").classList.remove("on"); openR = null; };
+$("sheetBack").onclick = function () {
+  $("sheet").classList.remove("on");
+  openR = null; openPts = null; openChunks = null;   // let the samples be collected
+};
 $("sheetDel").onclick = function () { if (openR) confirmDelete(openR); };
 
 /* ------------------------------------------------------------- export */
@@ -1327,21 +1331,6 @@ function fx(arr, i) {
   return (v === null || v === undefined || v !== v) ? "" : v.toFixed(4);
 }
 
-function accelRows(id) {
-  return byRide("accel", id).then(function (chunks) {
-    chunks.sort(bySeq);
-    var out = [ACCEL_COLS.join(",")];
-    chunks.forEach(function (ch) {
-      for (var i = 0; i < ch.t.length; i++) {
-        out.push(ch.t[i] + "," +
-          fx(ch.x, i) + "," + fx(ch.y, i) + "," + fx(ch.z, i) + "," +
-          fx(ch.lx, i) + "," + fx(ch.ly, i) + "," + fx(ch.lz, i) + "," +
-          fx(ch.ra, i) + "," + fx(ch.rb, i) + "," + fx(ch.rg, i));
-      }
-    });
-    return out.join("\n");
-  });
-}
 function gpsRows(pts) {
   var out = ["t_ms,epoch_ms,lat,lon,alt_m,acc_m,speed_ms,heading_deg"];
   pts.forEach(function (p) {
@@ -1368,49 +1357,118 @@ function fileBase(r) {
   return "bumplog-" + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) +
          "-" + pad2(d.getHours()) + pad2(d.getMinutes());
 }
-function deliver(name, text, mime) {
-  var blob = new Blob([text], { type: mime + ";charset=utf-8" });
-  var file = null;
-  try { file = new File([blob], name, { type: mime }); } catch (e) { file = null; }
-  if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
-    navigator.share({ files: [file] }).catch(function () {});
+/* iOS only allows the share sheet inside a user gesture, so every file has to be
+   assembled synchronously on the tap. The chunks are already in memory from when
+   the ride was opened; nothing here awaits. Blob takes an array of strings, which
+   keeps a long ride from ever existing as one giant concatenated string. */
+function deliver(name, parts, mime) {
+  var blob;
+  try {
+    blob = new Blob(parts, { type: mime + ";charset=utf-8" });
+  } catch (e) {
+    toast("File too large to build: " + (e && e.message ? e.message : e));
     return;
   }
+  var file = null;
+  try { file = new File([blob], name, { type: mime }); } catch (e) { file = null; }
+
+  if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      navigator.share({ files: [file] }).then(null, function (err) {
+        if (err && err.name === "AbortError") return;      // user tapped cancel
+        saveBlob(blob, name, err);
+      });
+      return;
+    } catch (e) { /* fall through to the download link */ }
+  }
+  saveBlob(blob, name, null);
+}
+
+function saveBlob(blob, name, shareErr) {
   var url = URL.createObjectURL(blob);
   var a = document.createElement("a");
   a.href = url; a.download = name; a.rel = "noopener";
   document.body.appendChild(a); a.click();
-  setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 4000);
+  setTimeout(function () {
+    if (a.parentNode) document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 8000);
+  if (shareErr) toast("Share refused (" + (shareErr.name || shareErr) + "), used a download instead");
+}
+
+function num(arr, i) {
+  if (!arr) return "null";
+  var v = arr[i];
+  return (v === null || v === undefined || v !== v) ? "null" : (Math.round(v * 10000) / 10000);
+}
+
+function accelCsvParts(chunks) {
+  var parts = [ACCEL_COLS.join(",") + "\n"], buf = [], i;
+  for (var c = 0; c < chunks.length; c++) {
+    var ch = chunks[c];
+    for (i = 0; i < ch.t.length; i++) {
+      buf.push(ch.t[i] + "," +
+        fx(ch.x, i) + "," + fx(ch.y, i) + "," + fx(ch.z, i) + "," +
+        fx(ch.lx, i) + "," + fx(ch.ly, i) + "," + fx(ch.lz, i) + "," +
+        fx(ch.ra, i) + "," + fx(ch.rb, i) + "," + fx(ch.rg, i));
+      if (buf.length >= 2000) { parts.push(buf.join("\n") + "\n"); buf = []; }
+    }
+  }
+  if (buf.length) parts.push(buf.join("\n") + "\n");
+  return parts;
+}
+
+function jsonParts(r, pts, chunks) {
+  var parts = ['{\n"bumplog": ' + JSON.stringify(VERSION) +
+    ',\n"units": ' + JSON.stringify({
+      t_ms: "milliseconds since the ride started",
+      ax_ay_az: "m/s^2, gravity included, phone frame",
+      lin: "m/s^2, gravity removed by iOS",
+      rot: "degrees per second",
+      gps_alt: "metres", gps_spd: "m/s", gps_acc: "metres",
+      roughness: "g, RMS of the high-passed magnitude"
+    }) +
+    ',\n"ride": ' + JSON.stringify(r) +
+    ',\n"gps": ' + JSON.stringify(pts) +
+    ',\n"accelColumns": ' + JSON.stringify(ACCEL_COLS) +
+    ',\n"accel": ['];
+  var buf = [], first = true, i;
+  for (var c = 0; c < chunks.length; c++) {
+    var ch = chunks[c];
+    for (i = 0; i < ch.t.length; i++) {
+      buf.push("[" + ch.t[i] + "," +
+        num(ch.x, i) + "," + num(ch.y, i) + "," + num(ch.z, i) + "," +
+        num(ch.lx, i) + "," + num(ch.ly, i) + "," + num(ch.lz, i) + "," +
+        num(ch.ra, i) + "," + num(ch.rb, i) + "," + num(ch.rg, i) + "]");
+      if (buf.length >= 2000) {
+        parts.push((first ? "" : ",") + buf.join(","));
+        first = false; buf = [];
+      }
+    }
+  }
+  if (buf.length) parts.push((first ? "" : ",") + buf.join(","));
+  parts.push("]\n}\n");
+  return parts;
 }
 
 Array.prototype.slice.call(document.querySelectorAll(".act[data-x]")).forEach(function (btn) {
   btn.onclick = function () {
     if (!openR) return;
     var kind = btn.getAttribute("data-x"), base = fileBase(openR);
-    toast("Preparing file");
-    if (kind === "gps") { deliver(base + "-gps.csv", gpsRows(openPts || []), "text/csv"); return; }
+
+    if (kind === "gps") {
+      if (!openPts || !openPts.length) { toast("No GPS fixes to export"); return; }
+      deliver(base + "-gps.csv", [gpsRows(openPts)], "text/csv"); return;
+    }
     if (kind === "gpx") {
       if (!openPts || !openPts.length) { toast("No GPS fixes to export"); return; }
-      deliver(base + ".gpx", gpxDoc(openR, openPts), "application/gpx+xml"); return;
+      deliver(base + ".gpx", [gpxDoc(openR, openPts)], "application/gpx+xml"); return;
     }
-    accelRows(openR.id).then(function (csv) {
-      if (kind === "accel") { deliver(base + "-accel.csv", csv, "text/csv"); return; }
-      var json = JSON.stringify({
-        ride: openR,
-        gps: openPts || [],
-        accel: csv.split("\n").slice(1).map(function (l) {
-          return l.split(",").map(function (v) { return v === "" ? null : Number(v); });
-        }),
-        accelColumns: ACCEL_COLS,
-        units: {
-          ax: "m/s^2, gravity included",
-          lin: "m/s^2, gravity removed by iOS",
-          rot: "degrees per second",
-          t: "ms since ride start"
-        }
-      });
-      deliver(base + ".json", json, "application/json");
-    });
+    if (!openChunks) { toast("Still reading the samples, give it a second"); return; }
+    if (kind === "accel") {
+      deliver(base + "-accel.csv", accelCsvParts(openChunks), "text/csv"); return;
+    }
+    deliver(base + ".json", jsonParts(openR, openPts || [], openChunks), "application/json");
   };
 });
 
