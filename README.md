@@ -52,6 +52,31 @@ Tap any row on the Rides tab. Three charts, all drawn from the samples on the ph
 
 No map tiles are fetched, so all of this works with no signal.
 
+## Airtime
+
+In free fall every axis reads close to zero, so a collapse in total g is the giveaway. Three
+guards keep noise out: the dip has to last at least 180 ms, it has to average under 0.40 g,
+and a landing of at least 1.6 g has to follow within 450 ms. Unweighting over a root, a hard
+compression and rock-garden chatter all fail at least one of those.
+
+Jumps show up live under the trace while you ride, as yellow marks along the top of the
+Movement chart, and as yellow dots on the Track. Rides recorded before this feature existed
+get analysed when you open them, so your old runs are covered too.
+
+Hang height is `g * t^2 / 8`, which assumes you land at the same height you took off from.
+A drop-off lands lower, takes longer, and so reads high. Treat it as a rough guide; airtime
+itself is the honest number.
+
+All six thresholds live in the `AIR` object near the top of the script. If your trail keeps
+fooling it, that is the place to adjust:
+
+    ENTER 0.30 g   the dip that might be flight
+    EXIT  0.55 g   back on the ground
+    MIN_MS 180     shorter than this is a jolt
+    MEAN_G 0.40 g  average across the dip
+    LAND_G 1.6 g   how hard a landing must be
+    GAP_MS 250     ignore a new jump this soon after the last
+
 ## Deleting rides
 
 - One ride: open it and tap Delete, or tap Edit on the Rides tab for a delete button on
@@ -73,8 +98,19 @@ files clears the stored copy and fetches everything again. Neither touches your 
 
 ## Reading the exports
 
-`*-accel.csv` — `t_ms,ax,ay,az`. Milliseconds since the ride started, then acceleration in
-m/s squared **with gravity included**, in the phone's own frame. Roughly 60 rows per second.
+`*-accel.csv` — ten columns, roughly 60 rows per second, about 1 MB per five minutes:
+
+| column | meaning |
+| --- | --- |
+| `t_ms` | milliseconds since the ride started |
+| `ax, ay, az` | acceleration in m/s squared, **gravity included**, phone frame |
+| `lin_x, lin_y, lin_z` | the same reading with gravity removed by iOS |
+| `rot_alpha, rot_beta, rot_gamma` | gyroscope, degrees per second |
+
+Blank cells mean iOS gave no value for that sample. Subtracting `lin_*` from `a*` gives the
+gravity vector, which is how the app works out which way is down inside the mount. That in
+turn splits each hit into a vertical part (roots, rocks, drops) and a lateral part (berm
+load, tyre squirm), reported on the ride as vertical and lateral roughness.
 
 `*-gps.csv` — `t_ms,epoch_ms,lat,lon,alt_m,acc_m,speed_ms,heading_deg`. Blank where iOS gave
 no value. Roughly 1 row per second.

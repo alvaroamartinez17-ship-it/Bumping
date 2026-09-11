@@ -21,6 +21,7 @@
   --orange:#F4671F;
   --green:#7BC28C;
   --red:#DC4A3D;
+  --air:#E8C25A;
   --pad:16px;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -91,7 +92,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   font-size:12px;color:var(--dust);font-variant-numeric:tabular-nums;
 }
 .tracefoot{
-  display:flex;gap:20px;padding:8px var(--pad) 0;
+  display:flex;flex-wrap:wrap;gap:8px 18px;padding:8px var(--pad) 0;
   font-size:12px;color:var(--dust);font-variant-numeric:tabular-nums;
 }
 .tracefoot b{color:var(--cream);font-weight:600}
@@ -265,6 +266,8 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
       <span><b id="fHz">0</b> Hz</span>
       <span><b id="fSamp">0</b> samples</span>
       <span><b id="fFix">0</b> fixes</span>
+      <span><b id="fTurn">0</b> deg/s</span>
+      <span><b id="fAir">0</b> jumps</span>
     </div>
 
     <div class="note" id="note"></div>
@@ -294,6 +297,8 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
       <div class="row"><span>Motion sensor</span><span class="rv" id="sMotion"></span></div>
       <div class="row"><span>Readings per second</span><span class="rv" id="sHz"></span></div>
       <div class="row"><span>Live reading</span><span class="rv" id="sRaw"></span></div>
+      <div class="row"><span>Gyroscope</span><span class="rv" id="sRot"></span></div>
+      <div class="row"><span>Gravity separation</span><span class="rv" id="sLin"></span></div>
       <div class="row"><span>Permission prompt available</span><span class="rv" id="sPerm"></span></div>
       <div class="row"><span>Secure connection</span><span class="rv" id="sHttps"></span></div>
       <div class="row"><span>Launched from home screen</span><span class="rv" id="sStandalone"></span></div>
@@ -437,6 +442,78 @@ function dateLabel(ts) {
   return days[d.getDay()] + " " + d.getDate() + " " + mon[d.getMonth()] +
          ", " + d.getHours() + ":" + pad2(d.getMinutes());
 }
+/* ---------------------------------------------------------------- air
+   Free fall reads near zero g on every axis, so |a| collapsing to almost
+   nothing is the signal. Three guards keep noise out: the dip has to last,
+   it has to be genuinely low on average, and a real landing has to follow.
+   Tune these six numbers if your trail keeps fooling it. */
+var AIR = {
+  ENTER: 0.30,      // g, below this we might be flying
+  EXIT: 0.55,       // g, above this we are back on the ground
+  MIN_MS: 180,      // shorter than this is a jolt, not a jump
+  MAX_MS: 3000,     // longer than this is a sensor glitch
+  MEAN_G: 0.40,     // average g across the dip must stay under this
+  LAND_G: 1.6,      // a landing has to hit at least this hard
+  LAND_MS: 450,     // window to wait for that landing spike
+  GAP_MS: 250       // ignore a new jump this soon after the last one
+};
+function airHeight(ms) { return G * Math.pow(ms / 1000, 2) / 8; }
+
+function makeAirDetector() {
+  return {
+    inAir: false, t0: 0, sum: 0, n: 0, minMag: 9,
+    pending: null, lastEnd: -1e9, jumps: [], airMs: 0,
+
+    push: function (t, mag) {
+      if (this.pending) {
+        if (mag > this.pending.peak) this.pending.peak = mag;
+        if (t - this.pending.end > AIR.LAND_MS) {
+          if (this.pending.peak >= AIR.LAND_G) {
+            this.jumps.push({
+              t: Math.round(this.pending.t),
+              dur: Math.round(this.pending.dur),
+              peak: Math.round(this.pending.peak * 100) / 100,
+              min: Math.round(this.pending.min * 100) / 100
+            });
+            this.airMs += this.pending.dur;
+          }
+          this.pending = null;
+        }
+      }
+      if (!this.inAir) {
+        if (mag < AIR.ENTER && t - this.lastEnd > AIR.GAP_MS) {
+          this.inAir = true; this.t0 = t; this.sum = mag; this.n = 1; this.minMag = mag;
+        }
+        return;
+      }
+      this.sum += mag; this.n++;
+      if (mag < this.minMag) this.minMag = mag;
+      if (mag > AIR.EXIT) {
+        var dur = t - this.t0;
+        this.inAir = false; this.lastEnd = t;
+        if (dur >= AIR.MIN_MS && dur <= AIR.MAX_MS && this.sum / this.n < AIR.MEAN_G) {
+          this.pending = { t: this.t0, dur: dur, end: t, peak: mag, min: this.minMag };
+        }
+      } else if (t - this.t0 > AIR.MAX_MS) {
+        this.inAir = false; this.lastEnd = t;
+      }
+    },
+
+    finish: function () {
+      if (this.pending && this.pending.peak >= AIR.LAND_G) {
+        this.jumps.push({
+          t: Math.round(this.pending.t), dur: Math.round(this.pending.dur),
+          peak: Math.round(this.pending.peak * 100) / 100,
+          min: Math.round(this.pending.min * 100) / 100
+        });
+        this.airMs += this.pending.dur;
+      }
+      this.pending = null;
+      return this.jumps;
+    }
+  };
+}
+
 var toastTimer = null;
 function toast(msg) {
   var t = $("toast");
@@ -453,7 +530,9 @@ function setDot(el, cls, text, label) {
 var R = {
   on: false,
   id: null, t0: 0, perf0: 0,
-  aT: [], aX: [], aY: [], aZ: [],       // accel buffer (t in ms since start)
+  aT: [], aX: [], aY: [], aZ: [],       // accel with gravity (t in ms since start)
+  aLX: [], aLY: [], aLZ: [],            // linear accel, gravity already removed by iOS
+  aRA: [], aRB: [], aRG: [],            // gyroscope, deg/s
   gBuf: [],                             // gps buffer
   aSeq: 0, gSeq: 0,
   nA: 0, nG: 0,
@@ -463,6 +542,9 @@ var R = {
   ema: 1,                               // smoothed |a| in g, for the high-pass
   sumSq: 0, nSq: 0, peak: 0,
   secBucketSq: 0, secBucketN: 0, secIdx: 0, rough: [],
+  vSum: 0, lSum: 0, vlN: 0,             // vertical and lateral energy, split by gravity
+  maxTurn: 0, turnNow: 0,
+  air: null,
   ring: new Float32Array(220), ringI: 0,
   hzCount: 0, hz: 0, hzT: 0,
   gaps: 0,
@@ -470,10 +552,14 @@ var R = {
 };
 
 function resetRecorder() {
-  R.aT = []; R.aX = []; R.aY = []; R.aZ = []; R.gBuf = [];
+  R.aT = []; R.aX = []; R.aY = []; R.aZ = [];
+  R.aLX = []; R.aLY = []; R.aLZ = []; R.aRA = []; R.aRB = []; R.aRG = [];
+  R.gBuf = [];
   R.aSeq = 0; R.gSeq = 0; R.nA = 0; R.nG = 0;
   R.lastFix = null; R.dist = 0; R.drop = 0; R.maxSpd = 0; R.spd = 0; R.lastAlt = null;
   R.ema = 1; R.sumSq = 0; R.nSq = 0; R.peak = 0;
+  R.vSum = 0; R.lSum = 0; R.vlN = 0; R.maxTurn = 0; R.turnNow = 0;
+  R.air = makeAirDetector();
   R.secBucketSq = 0; R.secBucketN = 0; R.secIdx = 0; R.rough = [];
   R.ring = new Float32Array(220); R.ringI = 0;
   R.hzCount = 0; R.hz = 0; R.gaps = 0;
@@ -492,11 +578,45 @@ function onMotion(e) {
   var t = performance.now() - R.perf0;
   var x = a.x, y = a.y, z = a.z;
 
+  var lin = e.acceleration;
+  var haveLin = !!(lin && lin.x !== null && lin.x !== undefined);
+  if (haveLin) hasLin = true;
+  var rot = e.rotationRate;
+  var haveRot = !!(rot && rot.alpha !== null && rot.alpha !== undefined);
+  if (haveRot) hasRot = true;
+
   if (R.on) {
     R.aT.push(Math.round(t)); R.aX.push(x); R.aY.push(y); R.aZ.push(z);
+    R.aLX.push(haveLin ? lin.x : NaN);
+    R.aLY.push(haveLin ? lin.y : NaN);
+    R.aLZ.push(haveLin ? lin.z : NaN);
+    R.aRA.push(haveRot ? rot.alpha : NaN);
+    R.aRB.push(haveRot ? rot.beta : NaN);
+    R.aRG.push(haveRot ? rot.gamma : NaN);
     R.nA++;
   }
   R.hzCount++;
+
+  /* Gravity is what is left when iOS subtracts the linear part. Knowing which way
+     it points lets us split a hit into the bit along the bike's vertical axis and
+     the bit across it, whatever angle the phone sits at in the mount. */
+  if (haveLin) {
+    var gx = x - lin.x, gy = y - lin.y, gz = z - lin.z;
+    var gm = Math.sqrt(gx * gx + gy * gy + gz * gz);
+    if (gm > 1) {
+      var ux = gx / gm, uy = gy / gm, uz = gz / gm;
+      var vert = (lin.x * ux + lin.y * uy + lin.z * uz) / G;
+      var hx = lin.x / G - vert * ux, hy = lin.y / G - vert * uy, hz = lin.z / G - vert * uz;
+      var lat = Math.sqrt(hx * hx + hy * hy + hz * hz);
+      lastSplit = { v: vert, l: lat };
+      if (R.on) { R.vSum += vert * vert; R.lSum += lat * lat; R.vlN++; }
+    }
+  }
+  if (haveRot) {
+    var rm = Math.sqrt(rot.alpha * rot.alpha + rot.beta * rot.beta + rot.gamma * rot.gamma);
+    R.turnNow += (rm - R.turnNow) * 0.15;
+    if (R.on && rm > R.maxTurn) R.maxTurn = rm;
+  }
 
   // orientation-free roughness: magnitude, high-passed by a slow EMA
   var mag = Math.sqrt(x * x + y * y + z * z) / G;
@@ -507,6 +627,7 @@ function onMotion(e) {
   R.ringI = (R.ringI + 1) % R.ring.length;
 
   if (R.on) {
+    if (R.air) R.air.push(t, mag);
     R.sumSq += hp * hp; R.nSq++;
     var ab = Math.abs(hp); if (ab > R.peak) R.peak = ab;
     R.secBucketSq += hp * hp; R.secBucketN++;
@@ -559,8 +680,14 @@ function onFix(pos) {
 
 function flushAccel() {
   if (!R.aT.length) return;
-  var rec = { k: R.id + ":" + pad6(R.aSeq++), ride: R.id, t: R.aT, x: R.aX, y: R.aY, z: R.aZ };
+  var rec = {
+    k: R.id + ":" + pad6(R.aSeq++), ride: R.id,
+    t: R.aT, x: R.aX, y: R.aY, z: R.aZ,
+    lx: R.aLX, ly: R.aLY, lz: R.aLZ,
+    ra: R.aRA, rb: R.aRB, rg: R.aRG
+  };
   R.aT = []; R.aX = []; R.aY = []; R.aZ = [];
+  R.aLX = []; R.aLY = []; R.aLZ = []; R.aRA = []; R.aRB = []; R.aRG = [];
   R.flushT = performance.now() - R.perf0;
   put("accel", rec).catch(function () { toast("Storage write failed"); });
 }
@@ -573,9 +700,10 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.3";
+var VERSION = "1.5";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
+var hasLin = false, hasRot = false, lastSplit = null;
 
 function attachMotion() {
   if (motionAttached) return;
@@ -685,6 +813,11 @@ function stop() {
     rms: R.nSq ? Math.round(Math.sqrt(R.sumSq / R.nSq) * 1000) / 1000 : 0,
     peak: Math.round(R.peak * 100) / 100,
     hz: R.nA && R.t0 ? Math.round(R.nA / ((Date.now() - R.t0) / 1000)) : 0,
+    vRms: R.vlN ? Math.round(Math.sqrt(R.vSum / R.vlN) * 1000) / 1000 : null,
+    lRms: R.vlN ? Math.round(Math.sqrt(R.lSum / R.vlN) * 1000) / 1000 : null,
+    maxTurn: R.maxTurn ? Math.round(R.maxTurn) : null,
+    jumps: R.air ? R.air.finish() : [],
+    airMs: R.air ? Math.round(R.air.airMs) : 0,
     gaps: R.gaps,
     rough: R.rough
   };
@@ -715,6 +848,8 @@ function loop(ts) {
   $("fHz").textContent = R.hz;
   $("fSamp").textContent = R.nA.toLocaleString();
   $("fFix").textContent = R.nG;
+  $("fTurn").textContent = Math.round(R.turnNow);
+  $("fAir").textContent = R.air ? R.air.jumps.length : 0;
   $("tracePeak").textContent = R.peak ? "peak " + R.peak.toFixed(2) + " g" : "";
   drawTrace();
 }
@@ -755,6 +890,11 @@ function drawTrace() {
     if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
   }
   c.stroke();
+
+  if (R.on && R.air && R.air.inAir) {
+    c.fillStyle = "#E8C25A"; c.font = "600 13px -apple-system,sans-serif";
+    c.fillText("air", 8, 18);
+  }
 
   if (!motionReady) {
     c.fillStyle = "#998C79"; c.font = "13px -apple-system,sans-serif";
@@ -801,12 +941,14 @@ function buildEnvelope(chunks, dur, cols) {
   var mn = new Float32Array(cols), mx = new Float32Array(cols), has = new Uint8Array(cols);
   var ema = 1, peak = 0, n = 0;
   var rough = [], secSq = 0, secN = 0, secIdx = 0;
+  var air = makeAirDetector();
   chunks.forEach(function (ch) {
     for (var i = 0; i < ch.t.length; i++) {
       var t = ch.t[i];
       var mag = Math.sqrt(ch.x[i] * ch.x[i] + ch.y[i] * ch.y[i] + ch.z[i] * ch.z[i]) / G;
       ema += (mag - ema) * 0.05;
       var hp = mag - ema;
+      air.push(t, mag);
       n++;
       var col = Math.floor(t / dur * cols);
       if (col < 0) col = 0; if (col > cols - 1) col = cols - 1;
@@ -822,11 +964,13 @@ function buildEnvelope(chunks, dur, cols) {
     }
   });
   if (secN) rough.push(Math.sqrt(secSq / secN));
-  return { mn: mn, mx: mx, has: has, cols: cols, peak: peak, rough: rough, n: n };
+  air.finish();
+  return { mn: mn, mx: mx, has: has, cols: cols, peak: peak, rough: rough, n: n,
+           jumps: air.jumps, airMs: air.airMs };
 }
 
 /* Movement: pale band is every reading, solid core is the typical energy per second. */
-function drawAccel(env, rough, dur) {
+function drawAccel(env, rough, dur, jumps) {
   var f = fitCanvas($("cvAccel"), 150);
   if (!f) return;
   var c = f.c, w = f.w, h = f.h, mid = h / 2, pad = 14;
@@ -855,6 +999,15 @@ function drawAccel(env, rough, dur) {
         if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
       }
       c.stroke();
+    }
+  }
+
+  if (jumps && jumps.length) {
+    c.fillStyle = "#E8C25A";
+    for (i = 0; i < jumps.length; i++) {
+      var jx = (jumps[i].t / dur) * w;
+      var jw = Math.max(2.5, (jumps[i].dur / dur) * w);
+      c.fillRect(jx, 0, jw, 4);
     }
   }
 
@@ -933,7 +1086,7 @@ function roughColor(u) {
 }
 
 /* Track shape, each segment coloured by how rough that moment was. */
-function drawTrack(pts, rough) {
+function drawTrack(pts, rough, jumps) {
   var f = fitCanvas($("cvTrack"), 200);
   if (!f) return;
   var c = f.c, w = f.w, h = f.h, i;
@@ -972,6 +1125,20 @@ function drawTrack(pts, rough) {
     c.lineTo(px(pts[i]), py(pts[i]));
     c.stroke();
   }
+  if (jumps && jumps.length) {
+    c.fillStyle = "#E8C25A";
+    for (var j = 0; j < jumps.length; j++) {
+      var mid = jumps[j].t + jumps[j].dur / 2, best = null, bd = 1e12;
+      for (i = 0; i < pts.length; i++) {
+        var d2 = Math.abs(pts[i].t - mid);
+        if (d2 < bd) { bd = d2; best = pts[i]; }
+      }
+      if (best && bd < 4000) {
+        c.beginPath(); c.arc(px(best), py(best), 4, 0, 6.2832); c.fill();
+      }
+    }
+  }
+
   c.fillStyle = "#7BC28C";
   c.beginPath(); c.arc(px(pts[0]), py(pts[0]), 5, 0, 6.2832); c.fill();
   c.fillStyle = "#F0E7D7";
@@ -1058,6 +1225,11 @@ var openR = null, openPts = null;
 
 function bySeq(a, b) { return a.k < b.k ? -1 : 1; }
 
+function cellHtml(v, k) {
+  return '<div class="cell"><div class="v num">' + v + '</div><div class="k">' + k + '</div></div>';
+}
+function addCell(v, k) { $("sheetGrid").innerHTML += cellHtml(v, k); }
+
 function openRide(r) {
   try {
     openR = r; openPts = null;
@@ -1072,8 +1244,13 @@ function openRide(r) {
       [(r.nAccel || 0).toLocaleString(), "accel samples"],
       [(r.hz || 0) + " Hz", "sample rate"]
     ];
+    if (r.vRms !== null && r.vRms !== undefined) {
+      cells.push([r.vRms.toFixed(3) + " g", "vertical roughness"]);
+      cells.push([r.lRms.toFixed(3) + " g", "lateral roughness"]);
+    }
+    if (r.maxTurn) cells.push([r.maxTurn + " deg/s", "fastest rotation"]);
     $("sheetGrid").innerHTML = cells.map(function (cc) {
-      return '<div class="cell"><div class="v num">' + cc[0] + '</div><div class="k">' + cc[1] + '</div></div>';
+      return cellHtml(cc[0], cc[1]);
     }).join("");
     $("hAccel").textContent = (r.nAccel || 0).toLocaleString() + " rows";
     $("hGps").textContent = (r.nGps || 0) + " fixes";
@@ -1102,9 +1279,21 @@ function loadRide(r) {
     var env = buildEnvelope(aChunks, dur, cols);
     var rough = (r.rough && r.rough.length) ? r.rough : env.rough;
 
-    drawAccel(env, rough, dur);
+    var jumps = (r.jumps !== undefined && r.jumps !== null) ? r.jumps : env.jumps;
+    var airMs = (r.airMs !== undefined && r.airMs !== null) ? r.airMs : env.airMs;
+
+    drawAccel(env, rough, dur, jumps);
     drawSpeedAlt(pts, dur);
-    drawTrack(pts, rough);
+    drawTrack(pts, rough, jumps);
+
+    if (jumps && jumps.length) {
+      var longest = 0;
+      for (var q = 0; q < jumps.length; q++) if (jumps[q].dur > longest) longest = jumps[q].dur;
+      addCell(jumps.length, "jumps");
+      addCell((airMs / 1000).toFixed(1) + " s", "total airtime");
+      addCell((longest / 1000).toFixed(2) + " s", "longest air");
+      addCell(airHeight(longest).toFixed(2) + " m", "that jump's hang height");
+    }
 
     $("capAccel").textContent = env.n
       ? "Every one of the " + env.n.toLocaleString() + " readings, gravity removed. The grey " +
@@ -1114,8 +1303,12 @@ function loadRide(r) {
       ? "Speed in orange, ground height as the shaded area behind it."
       : "";
     $("trackCap").textContent = pts.length > 1
-      ? "Green is the start. Brighter orange means the trail was rougher there."
+      ? "Green is the start. Brighter orange means the trail was rougher there." +
+        (jumps && jumps.length ? " Yellow dots are jumps." : "")
       : "";
+    if (jumps && jumps.length) {
+      $("capAccel").textContent += " Yellow marks along the top are time in the air.";
+    }
   }).catch(function (e) {
     toast("Could not read ride data: " + (e && e.message ? e.message : e));
   });
@@ -1125,13 +1318,25 @@ $("sheetBack").onclick = function () { $("sheet").classList.remove("on"); openR 
 $("sheetDel").onclick = function () { if (openR) confirmDelete(openR); };
 
 /* ------------------------------------------------------------- export */
+var ACCEL_COLS = ["t_ms", "ax", "ay", "az", "lin_x", "lin_y", "lin_z",
+                  "rot_alpha", "rot_beta", "rot_gamma"];
+
+function fx(arr, i) {
+  if (!arr) return "";
+  var v = arr[i];
+  return (v === null || v === undefined || v !== v) ? "" : v.toFixed(4);
+}
+
 function accelRows(id) {
   return byRide("accel", id).then(function (chunks) {
-    chunks.sort(function (a, b) { return a.k < b.k ? -1 : 1; });
-    var out = ["t_ms,ax,ay,az"];
+    chunks.sort(bySeq);
+    var out = [ACCEL_COLS.join(",")];
     chunks.forEach(function (ch) {
       for (var i = 0; i < ch.t.length; i++) {
-        out.push(ch.t[i] + "," + ch.x[i].toFixed(4) + "," + ch.y[i].toFixed(4) + "," + ch.z[i].toFixed(4));
+        out.push(ch.t[i] + "," +
+          fx(ch.x, i) + "," + fx(ch.y, i) + "," + fx(ch.z, i) + "," +
+          fx(ch.lx, i) + "," + fx(ch.ly, i) + "," + fx(ch.lz, i) + "," +
+          fx(ch.ra, i) + "," + fx(ch.rb, i) + "," + fx(ch.rg, i));
       }
     });
     return out.join("\n");
@@ -1194,11 +1399,15 @@ Array.prototype.slice.call(document.querySelectorAll(".act[data-x]")).forEach(fu
         ride: openR,
         gps: openPts || [],
         accel: csv.split("\n").slice(1).map(function (l) {
-          var v = l.split(",");
-          return [Number(v[0]), Number(v[1]), Number(v[2]), Number(v[3])];
+          return l.split(",").map(function (v) { return v === "" ? null : Number(v); });
         }),
-        accelColumns: ["t_ms", "ax", "ay", "az"],
-        units: { accel: "m/s^2, gravity included", t: "ms since ride start" }
+        accelColumns: ACCEL_COLS,
+        units: {
+          ax: "m/s^2, gravity included",
+          lin: "m/s^2, gravity removed by iOS",
+          rot: "degrees per second",
+          t: "ms since ride start"
+        }
       });
       deliver(base + ".json", json, "application/json");
     });
@@ -1229,6 +1438,16 @@ function renderSetup() {
     raw.textContent = mEvents ? mEvents + " empty events" : "nothing yet";
     raw.className = "rv no";
   }
+
+  var rr = $("sRot");
+  rr.textContent = hasRot ? "reading" : (motionReady ? "not reported" : "waiting");
+  rr.className = "rv " + (hasRot ? "ok" : "no");
+  var ll = $("sLin");
+  ll.textContent = hasLin
+    ? (lastSplit ? "up " + lastSplit.v.toFixed(2) + " g, across " + lastSplit.l.toFixed(2) + " g"
+                 : "reading")
+    : (motionReady ? "not reported" : "waiting");
+  ll.className = "rv " + (hasLin ? "ok" : "no");
 
   var hasPrompt = window.DeviceMotionEvent &&
                   typeof DeviceMotionEvent.requestPermission === "function";
