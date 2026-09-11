@@ -320,8 +320,11 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
       <button class="big go" id="btnAllow">Allow motion access</button>
       <button class="big" id="btnUpdate">Check for update</button>
       <button class="big" id="btnRefetch">Re-download the app files</button>
+      <button class="big" id="btnShareTest">Test what this phone will share</button>
       <button class="big" id="btnWipe" style="color:var(--red)">Delete all rides</button>
     </div>
+
+    <div class="rows" id="shareProbe" style="display:none"></div>
 
     <div class="tip">
       <p><b>If the live reading stays empty:</b> the permission was refused at some point and
@@ -384,18 +387,23 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
       <div class="row"><span>Automatic save</span><span class="rv no" id="expWhy"></span></div>
     </div>
     <div class="btnrow">
-      <button class="big go" id="expShare">Save to Files</button>
+      <button class="big go" id="expCopy">Copy all of it to the clipboard</button>
+      <button class="big" id="expShare">Try Save to Files again</button>
+      <button class="big" id="expShareText">Share it as a message instead</button>
       <a class="big" id="expDl" download>Download it</a>
-      <button class="big" id="expCopy">Copy all of it</button>
     </div>
     <div class="tip">
-      <p><b>Save to Files</b> opens the iOS share sheet. Scroll down the icons and pick
-      Save to Files, then On My iPhone. That is the one that leaves a real file you can
-      attach later.</p>
+      <p><b>Copy all of it</b> puts the whole file on the clipboard. Paste it into Notes,
+      save the note, and you have it on the phone for later. For the summary export this is
+      the route that always works.</p>
+      <p><b>Save to Files</b> opens the iOS share sheet, then pick Save to Files and On My
+      iPhone. iOS only shares file types it recognises, so this tries plainer and plainer
+      versions of the same data until one is accepted.</p>
+      <p><b>Share it as a message</b> sends the contents as text rather than a file, which
+      works for the summary but not for a long raw export.</p>
       <p><b>Download it</b> works in Safari but does nothing when the app is launched from
       the home screen, because a home screen app has no download manager.</p>
-      <p><b>Copy all of it</b> puts the whole file on the clipboard, which you can paste
-      into Notes or Mail. Best for the summary, awkward for a long raw export.</p>
+
     </div>
     <textarea id="expText" readonly></textarea>
   </div>
@@ -745,7 +753,7 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.8";
+var VERSION = "1.9";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
@@ -1299,6 +1307,43 @@ $("btnEdit").onclick = function () {
 };
 $("btnWipe").onclick = deleteAllRides;
 
+/* Which file types iOS will actually hand to the share sheet varies by version and
+   is not documented anywhere useful, so ask the phone directly. */
+$("btnShareTest").onclick = function () {
+  var box = $("shareProbe");
+  if (!navigator.share) {
+    box.innerHTML = '<div class="row"><span>Share support</span><span class="rv no">none at all</span></div>';
+    box.style.display = "block";
+    return;
+  }
+  var sample = new Blob(['{"test":1}'], { type: "text/plain" });
+  var tries = [
+    ["ride.json", "application/json"],
+    ["ride.json", "text/plain"],
+    ["ride.json.txt", "text/plain"],
+    ["ride.txt", "text/plain"],
+    ["ride.csv", "text/csv"],
+    ["ride.gpx", "application/gpx+xml"]
+  ];
+  var html = '<div class="row"><span>canShare available</span><span class="rv ' +
+             (navigator.canShare ? "ok\">yes" : "no\">no, cannot probe") + '</span></div>';
+  for (var i = 0; i < tries.length; i++) {
+    var f = makeFile(sample, tries[i][0], tries[i][1]);
+    var ok = false;
+    if (f && navigator.canShare) {
+      try { ok = navigator.canShare({ files: [f] }); } catch (e) { ok = false; }
+    }
+    html += '<div class="row"><span>' + tries[i][0] + '</span>' +
+            '<span class="rv ' + (ok ? "ok" : "no") + '">' + (ok ? "accepted" : "refused") + '</span></div>';
+  }
+  html += '<div class="row"><span>Share plain text</span><span class="rv ' +
+          (navigator.canShare && navigator.canShare({ text: "x" }) ? "ok\">accepted" : "no\">refused") +
+          '</span></div>';
+  box.innerHTML = html;
+  box.style.display = "block";
+  toast("Tell Claude which rows say accepted");
+};
+
 function renderRides() {
   return getAll("rides").then(function (rows) {
     rides = rows.filter(function (r) { return !r.open; })
@@ -1492,6 +1537,53 @@ function makeFile(blob, name, mime) {
   try { return new File([blob], name, { type: mime }); } catch (e) { return null; }
 }
 
+/* iOS maps a filename extension to a system file type and refuses to share the ones
+   it does not recognise, which is why a .json file throws TypeError. Walk a ladder
+   of increasingly plain alternatives and hand back the first the phone will accept. */
+function shareLadder(name, mime) {
+  var dot = name.lastIndexOf(".");
+  var stem = dot > 0 ? name.slice(0, dot) : name;
+  var ext = dot > 0 ? name.slice(dot) : "";
+  return [
+    { n: name, m: mime },
+    { n: name, m: "text/plain" },
+    { n: stem + ext + ".txt", m: "text/plain" },
+    { n: stem + ".txt", m: "text/plain" },
+    { n: stem + ".csv", m: "text/csv" }
+  ];
+}
+
+function pickShareable(blob, name, mime) {
+  var lad = shareLadder(name, mime), i, f;
+  for (i = 0; i < lad.length; i++) {
+    f = makeFile(blob, lad[i].n, lad[i].m);
+    if (!f) continue;
+    if (!navigator.canShare) return f;
+    try { if (navigator.canShare({ files: [f] })) return f; } catch (e) { /* try next */ }
+  }
+  return null;
+}
+
+/* canShare is not always honest on iOS, so record what actually gets refused and
+   skip it next time rather than making the person tap through the same failure. */
+var shareBlocked = {};
+function pickShareableSkipping(blob, name, mime) {
+  var lad = shareLadder(name, mime), i, f;
+  for (i = 0; i < lad.length; i++) {
+    if (shareBlocked[lad[i].m + "|" + lad[i].n.slice(lad[i].n.lastIndexOf("."))]) continue;
+    f = makeFile(blob, lad[i].n, lad[i].m);
+    if (!f) continue;
+    if (!navigator.canShare) return f;
+    try { if (navigator.canShare({ files: [f] })) return f; } catch (e) { /* try next */ }
+  }
+  return null;
+}
+function markBlocked(file) {
+  if (!file) return;
+  var d = file.name.lastIndexOf(".");
+  shareBlocked[file.type + "|" + (d > 0 ? file.name.slice(d) : "")] = true;
+}
+
 function deliver(name, parts, mime) {
   var blob;
   try {
@@ -1502,32 +1594,22 @@ function deliver(name, parts, mime) {
   }
   lastExport = { blob: blob, name: name, parts: parts, mime: mime };
 
-  if (!navigator.share) { showExport("this browser has no share support"); return; }
-
-  // iOS refuses some types outright; plain text is accepted everywhere
-  var file = makeFile(blob, name, mime), why = "";
-  var allowed = true;
-  if (navigator.canShare) {
-    try { allowed = file && navigator.canShare({ files: [file] }); } catch (e) { allowed = false; }
-    if (!allowed) {
-      var alt = makeFile(blob, name, "text/plain");
-      try { allowed = alt && navigator.canShare({ files: [alt] }); } catch (e) { allowed = false; }
-      if (allowed) file = alt; else why = "iOS refused this file type";
-    }
-  }
-  if (!file) { showExport("could not wrap the data as a file"); return; }
-  if (!allowed) { showExport(why); return; }
+  if (!navigator.share) { showExport("this browser cannot share files"); return; }
+  var file = pickShareableSkipping(blob, name, mime);
+  if (!file) { showExport("iOS will not accept any file type we can build"); return; }
 
   try {
     var p = navigator.share({ files: [file] });
     if (p && p.then) {
       p.then(null, function (err) {
-        if (err && err.name === "AbortError") return;      // user cancelled, nothing wrong
-        showExport("share failed, " + (err && err.name ? err.name : err));
+        if (err && err.name === "AbortError") return;          // cancelled, all fine
+        markBlocked(file);
+        showExport("iOS refused a " + file.type + " file (" + (err && err.name ? err.name : err) + ")");
       });
     }
   } catch (e) {
-    showExport("share threw " + (e && e.name ? e.name : e));
+    markBlocked(file);
+    showExport("iOS refused a " + file.type + " file (" + (e && e.name ? e.name : e) + ")");
   }
 }
 
@@ -1547,17 +1629,35 @@ function showExport(why) {
 }
 $("expBack").onclick = function () { $("expSheet").classList.remove("on"); };
 $("expShare").onclick = function () {
-  if (!lastExport) return;
-  var f = makeFile(lastExport.blob, lastExport.name, lastExport.mime) ||
-          makeFile(lastExport.blob, lastExport.name, "text/plain");
-  if (!f || !navigator.share) { toast("Sharing is not available here"); return; }
+  if (!lastExport || !navigator.share) { toast("Sharing is not available here"); return; }
+  var f = pickShareableSkipping(lastExport.blob, lastExport.name, lastExport.mime);
+  if (!f) { toast("Every file type was refused. Use Copy instead."); return; }
   try {
     navigator.share({ files: [f] }).then(function () {
       $("expSheet").classList.remove("on");
     }, function (err) {
-      if (!err || err.name !== "AbortError") toast("Still refused: " + (err && err.name ? err.name : err));
+      if (!err || err.name === "AbortError") return;
+      markBlocked(f);
+      $("expWhy").textContent = "refused " + f.type + " as " + f.name.slice(f.name.lastIndexOf("."));
+      toast("Refused again. Tap once more to try a plainer type, or use Copy.");
     });
-  } catch (e) { toast("Share threw " + (e && e.name ? e.name : e)); }
+  } catch (e) {
+    markBlocked(f);
+    toast("Refused again. Tap once more to try a plainer type, or use Copy.");
+  }
+};
+$("expShareText").onclick = function () {
+  if (!lastExport || !navigator.share) { toast("Sharing is not available here"); return; }
+  var text = lastExport.parts.join("");
+  if (text.length > 400000) { toast("Too long to send as a message. Use Copy."); return; }
+  try {
+    navigator.share({ text: text }).then(function () {
+      $("expSheet").classList.remove("on");
+    }, function (err) {
+      if (!err || err.name === "AbortError") return;
+      toast("Message share refused: " + (err && err.name ? err.name : err));
+    });
+  } catch (e) { toast("Message share threw " + (e && e.name ? e.name : e)); }
 };
 $("expCopy").onclick = function () {
   if (!lastExport) return;
