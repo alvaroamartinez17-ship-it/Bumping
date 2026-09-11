@@ -138,19 +138,47 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .head h2{margin:0;font-size:22px;font-weight:700;letter-spacing:-0.02em}
 .head .sub{font-size:13px;color:var(--dust);margin-left:auto;font-variant-numeric:tabular-nums}
 .list{list-style:none;margin:0;padding:0 0 24px}
+.list li{display:flex;align-items:stretch;border-top:1px solid var(--rule)}
+.list li:last-child{border-bottom:1px solid var(--rule)}
+.list li.empty{display:block;border:0}
 .ride{
+  flex:1;min-width:0;
   display:flex;align-items:center;gap:12px;
-  width:100%;text-align:left;
+  text-align:left;
   padding:13px var(--pad);
-  border-top:1px solid var(--rule);
 }
-.ride:last-child{border-bottom:1px solid var(--rule)}
+.del{
+  flex:0 0 auto;padding:0 18px;color:var(--red);font-size:14.5px;
+  border-left:1px solid var(--rule);display:none;align-items:center;
+}
+.list.editing .del{display:flex}
 .ride .when{display:block;font-size:15px;font-weight:600}
 .ride .facts{display:block;font-size:12.5px;color:var(--dust);font-variant-numeric:tabular-nums;margin-top:3px}
 .ride .facts i{font-style:normal;color:var(--rule);padding:0 7px}
 .ride canvas{width:66px;height:30px;flex:0 0 auto;margin-left:auto;opacity:.9}
 .empty{padding:40px var(--pad);color:var(--dust);font-size:14px;line-height:1.6}
 .empty b{display:block;color:var(--cream);font-size:16px;margin-bottom:6px;font-weight:600}
+
+/* ---------- setup ---------- */
+.strip button{font:inherit}
+.sensor.tapme{color:var(--orange)}
+.rows{padding:0 var(--pad)}
+.row{
+  display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+  padding:12px 0;border-bottom:1px solid var(--rule);font-size:14.5px;
+}
+.row .rv{color:var(--dust);font-variant-numeric:tabular-nums;text-align:right}
+.row .rv.ok{color:var(--green)}
+.row .rv.no{color:var(--red)}
+.btnrow{padding:18px var(--pad) 0;display:flex;flex-direction:column;gap:9px}
+.big{
+  padding:14px;border:1px solid var(--rule);border-radius:3px;
+  background:var(--panel);font-size:15px;text-align:center;
+}
+.big.go{background:var(--orange);color:#1A1105;border-color:var(--orange);font-weight:600}
+.tip{padding:18px var(--pad) 30px;font-size:13px;color:var(--dust);line-height:1.6}
+.tip p{margin:0 0 11px}
+.tip b{color:var(--cream);font-weight:600}
 
 /* ---------- detail sheet ---------- */
 .sheet{
@@ -198,7 +226,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 <div id="app">
 
   <div class="strip">
-    <span class="sensor"><i class="dot" id="dMotion"></i><span id="tMotion">Motion off</span></span>
+    <button class="sensor" id="chipMotion"><i class="dot" id="dMotion"></i><span id="tMotion">Motion starting</span></button>
     <span class="sensor"><i class="dot" id="dGps"></i><span id="tGps">GPS off</span></span>
     <span class="right" id="tStore"></span>
   </div>
@@ -238,14 +266,48 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   <section class="screen" id="scRides">
     <div class="head">
       <h2>Rides</h2>
-      <span class="sub" id="ridesSub"></span>
+      <span class="sub" id="ridesSub" style="margin-left:auto"></span>
+      <button id="btnEdit" style="font-size:15px;color:var(--orange)">Edit</button>
     </div>
     <ul class="list" id="rideList"></ul>
+  </section>
+
+  <!-- ============ SETUP ============ -->
+  <section class="screen" id="scSetup">
+    <div class="head"><h2>Setup</h2><span class="sub" id="verSub"></span></div>
+
+    <div class="rows">
+      <div class="row"><span>Motion sensor</span><span class="rv" id="sMotion"></span></div>
+      <div class="row"><span>Readings per second</span><span class="rv" id="sHz"></span></div>
+      <div class="row"><span>Live reading</span><span class="rv" id="sRaw"></span></div>
+      <div class="row"><span>Permission prompt available</span><span class="rv" id="sPerm"></span></div>
+      <div class="row"><span>Secure connection</span><span class="rv" id="sHttps"></span></div>
+      <div class="row"><span>Launched from home screen</span><span class="rv" id="sStandalone"></span></div>
+      <div class="row"><span>GPS</span><span class="rv" id="sGps"></span></div>
+      <div class="row"><span>Offline copy installed</span><span class="rv" id="sSw"></span></div>
+      <div class="row"><span>Stored on this phone</span><span class="rv" id="sDisk"></span></div>
+    </div>
+
+    <div class="btnrow">
+      <button class="big go" id="btnAllow">Allow motion access</button>
+      <button class="big" id="btnUpdate">Check for update</button>
+      <button class="big" id="btnRefetch">Re-download the app files</button>
+      <button class="big" id="btnWipe" style="color:var(--red)">Delete all rides</button>
+    </div>
+
+    <div class="tip">
+      <p><b>If the live reading stays empty:</b> the permission was refused at some point and
+      iOS will not ask again, no matter what the Settings toggle says. Reset it with Settings,
+      Safari, Clear History and Website Data, then open the app and tap Allow motion access.</p>
+      <p><b>Updates</b> arrive when the app files on GitHub change. Tap Check for update on
+      wifi. Nothing is downloaded at any other time, and your rides are never touched.</p>
+    </div>
   </section>
 
   <nav class="tabs">
     <button class="tab on" data-go="scRec">Record</button>
     <button class="tab" data-go="scRides">Rides <span class="badge" id="tabCount"></span></button>
+    <button class="tab" data-go="scSetup">Setup</button>
   </nav>
 </div>
 
@@ -395,8 +457,15 @@ function resetRecorder() {
 }
 
 function onMotion(e) {
+  mEvents++;
   var a = e.accelerationIncludingGravity;
-  if (!a || a.x === null) return;
+  if (!a || a.x === null || a.x === undefined) { mEmpty++; return; }
+  if (!motionReady) {
+    motionReady = true;
+    setDot($("dMotion"), "live", "Motion live", $("tMotion"));
+    $("chipMotion").classList.remove("tapme");
+  }
+  lastRaw = { x: a.x, y: a.y, z: a.z };
   var t = performance.now() - R.perf0;
   var x = a.x, y = a.y, z = a.z;
 
@@ -429,6 +498,7 @@ function onMotion(e) {
 
 function onFix(pos) {
   var c = pos.coords;
+  gpsNote = "fix to " + Math.round(c.accuracy) + " m";
   setDot($("dGps"), c.accuracy <= 15 ? "live" : "warn",
     "GPS " + Math.round(c.accuracy) + " m", $("tGps"));
 
@@ -480,34 +550,77 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var motionReady = false, gpsWatch = null;
+var VERSION = "1.1";
+var motionAttached = false, motionReady = false, motionNote = "starting";
+var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 
-function askMotion() {
-  var DM = window.DeviceMotionEvent;
-  if (!DM) { setDot($("dMotion"), "bad", "No motion sensor", $("tMotion")); return Promise.resolve(false); }
-  if (typeof DM.requestPermission === "function") {
-    return DM.requestPermission().then(function (s) {
-      if (s === "granted") { attachMotion(); return true; }
-      setDot($("dMotion"), "bad", "Motion blocked", $("tMotion"));
-      return false;
-    }).catch(function () {
-      setDot($("dMotion"), "bad", "Motion blocked", $("tMotion"));
-      return false;
-    });
+function attachMotion() {
+  if (motionAttached) return;
+  window.addEventListener("devicemotion", onMotion, false);
+  motionAttached = true;
+}
+
+/* Attach on load, then see whether anything actually arrives. iOS only delivers
+   events once permission exists, so silence after a second means we must ask. */
+function probeMotion() {
+  if (!window.DeviceMotionEvent) {
+    motionNote = "not supported by this browser";
+    setDot($("dMotion"), "bad", "No motion sensor", $("tMotion"));
+    return;
   }
   attachMotion();
-  return Promise.resolve(true);
+  setTimeout(function () {
+    if (motionReady) return;
+    if (typeof DeviceMotionEvent.requestPermission === "function") {
+      motionNote = "waiting for permission";
+      setDot($("dMotion"), "warn", "Motion: tap to allow", $("tMotion"));
+      $("chipMotion").classList.add("tapme");
+    } else {
+      motionNote = mEvents ? "events arrive but carry no values" : "sensor silent";
+      setDot($("dMotion"), "warn", "Motion silent", $("tMotion"));
+    }
+  }, 1400);
 }
-function attachMotion() {
-  if (motionReady) return;
-  window.addEventListener("devicemotion", onMotion, false);
-  motionReady = true;
-  setDot($("dMotion"), "live", "Motion live", $("tMotion"));
+
+function askMotion() {
+  attachMotion();
+  if (motionReady) return Promise.resolve(true);
+  var DM = window.DeviceMotionEvent;
+  if (!DM) {
+    motionNote = "not supported by this browser";
+    setDot($("dMotion"), "bad", "No motion sensor", $("tMotion"));
+    return Promise.resolve(false);
+  }
+  if (typeof DM.requestPermission !== "function") {
+    // no prompt on this OS; the listener is on, so just give it a moment
+    return new Promise(function (res) { setTimeout(function () { res(motionReady); }, 900); });
+  }
+  return DM.requestPermission().then(function (s) {
+    if (s === "granted") {
+      attachMotion();
+      motionNote = "permission granted";
+      return new Promise(function (res) { setTimeout(function () { res(true); }, 500); });
+    }
+    motionNote = "permission refused, iOS will not ask again";
+    setDot($("dMotion"), "bad", "Motion blocked", $("tMotion"));
+    return false;
+  }).catch(function (err) {
+    motionNote = "prompt failed: " + (err && err.name ? err.name : err);
+    setDot($("dMotion"), "bad", "Motion blocked", $("tMotion"));
+    return false;
+  });
 }
+$("chipMotion").onclick = function () {
+  askMotion().then(function (ok) {
+    if (!ok) { go("scSetup"); toast("Motion is blocked. Setup explains how to reset it."); }
+  });
+};
 function startGps() {
   if (gpsWatch !== null || !navigator.geolocation) return;
+  gpsNote = "searching";
   setDot($("dGps"), "warn", "GPS searching", $("tGps"));
   gpsWatch = navigator.geolocation.watchPosition(onFix, function (err) {
+    gpsNote = err.code === 1 ? "permission refused" : (err.code === 3 ? "timed out" : "unavailable");
     setDot($("dGps"), "bad", err.code === 1 ? "GPS blocked" : "GPS lost", $("tGps"));
   }, { enableHighAccuracy: true, maximumAge: 0, timeout: 25000 });
 }
@@ -515,7 +628,7 @@ function startGps() {
 /* -------------------------------------------------------- start / stop */
 function start() {
   askMotion().then(function (ok) {
-    if (!ok) { toast("Allow motion access in Settings, Safari, Motion & Orientation Access"); return; }
+    if (!ok) { go("scSetup"); toast("No motion readings. Setup shows why."); return; }
     startGps();
     resetRecorder();
     R.id = "r" + Date.now();
@@ -621,7 +734,8 @@ function drawTrace() {
   if (!motionReady) {
     c.fillStyle = "#998C79"; c.font = "13px -apple-system,sans-serif";
     c.textAlign = "center";
-    c.fillText("Tap start to wake the sensor", w / 2, mid - 10);
+    c.fillText(motionNote === "waiting for permission"
+      ? "Tap the motion chip above to allow" : "Waiting for the motion sensor", w / 2, mid - 10);
     c.textAlign = "left";
   }
 }
@@ -703,7 +817,38 @@ function drawTrack(pts) {
 }
 
 /* ----------------------------------------------------------- rides list */
-var rides = [];
+var rides = [], editMode = false;
+
+function confirmDelete(r) {
+  if (!confirm("Delete the ride from " + dateLabel(r.startedAt) + "?\n\n" +
+      (r.nAccel || 0).toLocaleString() + " samples will be erased for good.")) return;
+  delRide(r.id).then(function () {
+    if (openR && openR.id === r.id) { $("sheet").classList.remove("on"); openR = null; }
+    renderRides();
+    updateStorage();
+    toast("Ride deleted");
+  });
+}
+
+function deleteAllRides() {
+  if (!rides.length) { toast("There are no rides to delete"); return; }
+  if (!confirm("Delete all " + rides.length + " rides?\n\nEverything recorded on this phone " +
+      "will be erased. Export anything you want to keep first.")) return;
+  if (!confirm("Last check. This cannot be undone.")) return;
+  Promise.all(rides.map(function (r) { return delRide(r.id); })).then(function () {
+    renderRides();
+    updateStorage();
+    toast("All rides deleted");
+  });
+}
+
+$("btnEdit").onclick = function () {
+  editMode = !editMode;
+  $("rideList").classList.toggle("editing", editMode);
+  $("btnEdit").textContent = editMode ? "Done" : "Edit";
+};
+$("btnWipe").onclick = deleteAllRides;
+
 function renderRides() {
   return getAll("rides").then(function (rows) {
     rides = rows.filter(function (r) { return !r.open; })
@@ -731,8 +876,13 @@ function renderRides() {
       b.querySelector(".facts").innerHTML =
         hms(r.dur || 0) + "<i>|</i>" + ((r.dist || 0) / 1000).toFixed(2) + " km<i>|</i>" +
         (r.rms || 0).toFixed(2) + " g rms";
-      b.onclick = function () { openRide(r); };
+      b.onclick = function () { if (!editMode) openRide(r); };
       li.appendChild(b);
+      var dbtn = document.createElement("button");
+      dbtn.className = "del";
+      dbtn.textContent = "Delete";
+      dbtn.onclick = function () { confirmDelete(r); };
+      li.appendChild(dbtn);
       ul.appendChild(li);
       drawSpark(b.querySelector("canvas"), r.rough);
     });
@@ -774,17 +924,7 @@ function openRide(r) {
   });
 }
 $("sheetBack").onclick = function () { $("sheet").classList.remove("on"); openR = null; };
-$("sheetDel").onclick = function () {
-  if (!openR) return;
-  if (!confirm("Delete this ride and all its samples? This cannot be undone.")) return;
-  delRide(openR.id).then(function () {
-    $("sheet").classList.remove("on");
-    openR = null;
-    renderRides();
-    toast("Ride deleted");
-    updateStorage();
-  });
-};
+$("sheetDel").onclick = function () { if (openR) confirmDelete(openR); };
 
 /* ------------------------------------------------------------- export */
 function accelRows(id) {
@@ -867,6 +1007,98 @@ Array.prototype.slice.call(document.querySelectorAll(".act[data-x]")).forEach(fu
   };
 });
 
+/* ---------------------------------------------------- setup and updates */
+function yn(el, good, yes, no) {
+  el.textContent = good ? yes : no;
+  el.className = "rv " + (good ? "ok" : "no");
+}
+function renderSetup() {
+  $("verSub").textContent = "version " + VERSION;
+
+  var m = $("sMotion");
+  m.textContent = motionReady ? "reading" : motionNote;
+  m.className = "rv " + (motionReady ? "ok" : "no");
+
+  $("sHz").textContent = R.hz + " Hz";
+  $("sHz").className = "rv " + (R.hz > 5 ? "ok" : "no");
+
+  var raw = $("sRaw");
+  if (lastRaw) {
+    raw.textContent = lastRaw.x.toFixed(2) + "  " + lastRaw.y.toFixed(2) + "  " + lastRaw.z.toFixed(2);
+    raw.className = "rv ok";
+  } else {
+    raw.textContent = mEvents ? mEvents + " empty events" : "nothing yet";
+    raw.className = "rv no";
+  }
+
+  var hasPrompt = window.DeviceMotionEvent &&
+                  typeof DeviceMotionEvent.requestPermission === "function";
+  yn($("sPerm"), !!hasPrompt, "yes", "no");
+  yn($("sHttps"), location.protocol === "https:" || location.hostname === "localhost",
+     location.protocol.replace(":", ""), "no, sensors need https");
+  yn($("sStandalone"), !!navigator.standalone, "yes", "no, running in Safari");
+
+  var g = $("sGps");
+  g.textContent = gpsNote;
+  g.className = "rv " + (gpsNote.indexOf("fix") === 0 ? "ok" : "no");
+
+  yn($("sSw"), !!(navigator.serviceWorker && navigator.serviceWorker.controller),
+     "yes, works offline", "not yet");
+
+  $("sDisk").textContent = diskText || "unknown";
+  $("sDisk").className = "rv";
+
+  $("btnAllow").style.display = motionReady ? "none" : "block";
+}
+$("btnAllow").onclick = function () {
+  askMotion().then(function (ok) {
+    toast(ok ? "Motion access granted" : "iOS refused. See the note below.");
+    renderSetup();
+  });
+};
+
+var swReg = null, updateReady = false;
+function markUpdate() {
+  updateReady = true;
+  $("btnUpdate").textContent = "Restart to finish the update";
+  $("btnUpdate").classList.add("go");
+  toast("A new version was downloaded");
+}
+function checkUpdate() {
+  if (updateReady) { location.reload(); return; }
+  if (!swReg) { toast("Offline copy not installed yet. Reload the page once."); return; }
+  $("btnUpdate").textContent = "Checking GitHub";
+  swReg.update().then(function () {
+    setTimeout(function () {
+      if (!updateReady) {
+        $("btnUpdate").textContent = "Check for update";
+        toast("Already on the newest version");
+      }
+    }, 3000);
+  }).catch(function () {
+    $("btnUpdate").textContent = "Check for update";
+    toast("Could not reach GitHub. Try again on wifi.");
+  });
+}
+$("btnUpdate").onclick = checkUpdate;
+
+$("btnRefetch").onclick = function () {
+  if (!confirm("Throw away the stored copy of the app and fetch it again?\n\n" +
+      "Needs an internet connection. Your rides are kept.")) return;
+  var step = ("caches" in window)
+    ? caches.keys().then(function (k) {
+        return Promise.all(k.map(function (x) { return caches.delete(x); }));
+      })
+    : Promise.resolve();
+  step.then(function () {
+    if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+      return navigator.serviceWorker.getRegistrations().then(function (rs) {
+        return Promise.all(rs.map(function (r) { return r.unregister(); }));
+      });
+    }
+  }).then(function () { location.reload(); });
+};
+
 /* ------------------------------------------------------------ chrome */
 function go(id) {
   Array.prototype.slice.call(document.querySelectorAll(".screen")).forEach(function (s) {
@@ -881,11 +1113,13 @@ Array.prototype.slice.call(document.querySelectorAll(".tab")).forEach(function (
 });
 $("btnRec").onclick = function () { R.on ? stop() : start(); };
 
+var diskText = "";
 function updateStorage() {
   if (navigator.storage && navigator.storage.estimate) {
     navigator.storage.estimate().then(function (e) {
       if (!e || !e.usage) return;
-      $("tStore").textContent = (e.usage / 1048576).toFixed(1) + " MB stored";
+      diskText = (e.usage / 1048576).toFixed(1) + " MB";
+      $("tStore").textContent = diskText + " stored";
     }).catch(function () {});
   }
 }
@@ -917,6 +1151,9 @@ openDB().then(function () {
 }).then(function () {
   updateStorage();
   setInterval(updateStorage, 20000);
+  probeMotion();
+  renderSetup();
+  setInterval(function () { if ($("scSetup").classList.contains("on")) renderSetup(); }, 600);
   requestAnimationFrame(loop);
 }).catch(function (err) {
   toast("Could not open local storage: " + err);
@@ -924,7 +1161,17 @@ openDB().then(function () {
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", function () {
-    navigator.serviceWorker.register("./sw.js").catch(function () {});
+    navigator.serviceWorker.register("./sw.js").then(function (reg) {
+      swReg = reg;
+      if (reg.waiting && navigator.serviceWorker.controller) markUpdate();
+      reg.addEventListener("updatefound", function () {
+        var sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener("statechange", function () {
+          if (sw.state === "installed" && navigator.serviceWorker.controller) markUpdate();
+        });
+      });
+    }).catch(function () {});
   });
 }
 </script>
