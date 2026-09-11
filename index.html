@@ -46,6 +46,9 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 }
 .screen{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;display:none;flex-direction:column}
 .screen.on{display:flex}
+/* a flex column shrinks its children to fit; without this the long screens get
+   squashed into the viewport instead of scrolling */
+.screen > *{flex-shrink:0}
 
 /* ---------- status strip ---------- */
 .strip{
@@ -53,14 +56,15 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   padding:10px var(--pad);
   border-bottom:1px solid var(--rule);
   font-size:13px;color:var(--dust);
-  flex:0 0 auto;
+  flex:0 0 auto;overflow:hidden;
 }
-.sensor{display:flex;align-items:center;gap:6px}
+.sensor{display:flex;align-items:center;gap:6px;min-width:0}
+.sensor span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--rule);flex:0 0 auto}
 .dot.live{background:var(--green)}
 .dot.warn{background:var(--orange)}
 .dot.bad{background:var(--red)}
-.strip .right{margin-left:auto;font-variant-numeric:tabular-nums}
+.strip .right{margin-left:auto;flex:0 0 auto;white-space:nowrap;font-variant-numeric:tabular-nums}
 
 /* ---------- record screen ---------- */
 .readout{padding:22px var(--pad) 6px}
@@ -136,7 +140,11 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   padding:18px var(--pad) 10px;
 }
 .head h2{margin:0;font-size:22px;font-weight:700;letter-spacing:-0.02em}
-.head .sub{font-size:13px;color:var(--dust);margin-left:auto;font-variant-numeric:tabular-nums}
+.head{flex-wrap:wrap}
+.head .sub{
+  font-size:13px;color:var(--dust);margin-left:auto;
+  font-variant-numeric:tabular-nums;white-space:nowrap;
+}
 .list{list-style:none;margin:0;padding:0 0 24px}
 .list li{display:flex;align-items:stretch;border-top:1px solid var(--rule)}
 .list li:last-child{border-bottom:1px solid var(--rule)}
@@ -164,10 +172,15 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .sensor.tapme{color:var(--orange)}
 .rows{padding:0 var(--pad)}
 .row{
-  display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+  display:flex;justify-content:space-between;align-items:baseline;gap:12px;
   padding:12px 0;border-bottom:1px solid var(--rule);font-size:14.5px;
+  line-height:1.35;
 }
-.row .rv{color:var(--dust);font-variant-numeric:tabular-nums;text-align:right}
+.row > span:first-child{flex:0 1 auto;min-width:0}
+.row .rv{
+  flex:1 1 auto;min-width:0;color:var(--dust);
+  font-variant-numeric:tabular-nums;text-align:right;
+}
 .row .rv.ok{color:var(--green)}
 .row .rv.no{color:var(--red)}
 .btnrow{padding:18px var(--pad) 0;display:flex;flex-direction:column;gap:9px}
@@ -182,10 +195,11 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 
 /* ---------- detail sheet ---------- */
 .sheet{
-  position:fixed;inset:0;z-index:20;background:var(--ink);
+  position:fixed;top:0;right:0;bottom:0;left:0;z-index:20;background:var(--ink);
   display:none;flex-direction:column;
   padding-top:env(safe-area-inset-top);
 }
+.plottitle{font-size:15px;font-weight:600;margin:24px var(--pad) 9px;letter-spacing:-0.01em}
 .sheet.on{display:flex}
 .sheetbar{
   display:flex;align-items:center;justify-content:space-between;
@@ -320,10 +334,19 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   </div>
   <div class="sheetbody">
     <div class="grid" id="sheetGrid"></div>
-    <div class="plot"><canvas id="cvRough"></canvas></div>
-    <p class="plotcap">Roughness second by second. Taller means a harsher second.</p>
+
+    <h3 class="plottitle">Movement</h3>
+    <div class="plot"><canvas id="cvAccel"></canvas></div>
+    <p class="plotcap" id="capAccel"></p>
+
+    <h3 class="plottitle">Speed and height</h3>
+    <div class="plot"><canvas id="cvSpeed"></canvas></div>
+    <p class="plotcap" id="capSpeed"></p>
+
+    <h3 class="plottitle">Track</h3>
     <div class="plot"><canvas id="cvTrack"></canvas></div>
-    <p class="plotcap" id="trackCap">Track shape from the GPS fixes.</p>
+    <p class="plotcap" id="trackCap"></p>
+
     <div class="acts">
       <button class="act" data-x="accel">Export accelerometer CSV<span class="hint" id="hAccel"></span></button>
       <button class="act" data-x="gps">Export GPS CSV<span class="hint" id="hGps"></span></button>
@@ -550,7 +573,7 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.1";
+var VERSION = "1.3";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 
@@ -573,7 +596,7 @@ function probeMotion() {
     if (motionReady) return;
     if (typeof DeviceMotionEvent.requestPermission === "function") {
       motionNote = "waiting for permission";
-      setDot($("dMotion"), "warn", "Motion: tap to allow", $("tMotion"));
+      setDot($("dMotion"), "warn", "Tap to allow", $("tMotion"));
       $("chipMotion").classList.add("tapme");
     } else {
       motionNote = mEvents ? "events arrive but carry no values" : "sensor silent";
@@ -706,6 +729,7 @@ function fitCanvas(cv, cssH) {
     cv.style.height = h + "px";
     cv._w = w; cv._h = h; cv._dpr = dpr;
   }
+  if (!w || !h) return null;
   var c = cv.getContext("2d");
   c.setTransform(cv._dpr, 0, 0, cv._dpr, 0, 0);
   return { c: c, w: w, h: h };
@@ -713,6 +737,7 @@ function fitCanvas(cv, cssH) {
 
 function drawTrace() {
   var f = fitCanvas($("cvTrace"));
+  if (!f) return;
   var c = f.c, w = f.w, h = f.h, mid = h / 2;
   c.clearRect(0, 0, w, h);
 
@@ -741,7 +766,9 @@ function drawTrace() {
 }
 
 function drawSpark(cv, rough) {
-  var f = fitCanvas(cv, 30), c = f.c, w = f.w, h = f.h;
+  var f = fitCanvas(cv, 30);
+  if (!f) return;
+  var c = f.c, w = f.w, h = f.h;
   c.clearRect(0, 0, w, h);
   if (!rough || !rough.length) return;
   var max = 0, i;
@@ -756,64 +783,199 @@ function drawSpark(cv, rough) {
   }
 }
 
-function drawRough(rough) {
-  var cv = $("cvRough");
-  var f = fitCanvas(cv, 120), c = f.c, w = f.w, h = f.h;
-  c.clearRect(0, 0, w, h);
-  if (!rough || !rough.length) return;
-  var max = 0, i;
-  for (i = 0; i < rough.length; i++) if (rough[i] > max) max = rough[i];
-  if (max <= 0) max = 1;
-  var pad = 10, gh = h - pad * 2;
-  c.fillStyle = "#F4671F";
-  var bw = w / rough.length;
-  for (i = 0; i < rough.length; i++) {
-    var bh = Math.max(1, (rough[i] / max) * gh);
-    c.fillRect(i * bw, h - pad - bh, Math.max(1, bw * 0.8), bh);
-  }
-  c.strokeStyle = "#382F27"; c.lineWidth = 1;
-  c.beginPath(); c.moveTo(0, h - pad + .5); c.lineTo(w, h - pad + .5); c.stroke();
-  c.fillStyle = "#998C79"; c.font = "11px -apple-system,sans-serif";
-  c.fillText(max.toFixed(2) + " g", 4, 12);
+function emptyPlot(c, w, h, msg) {
+  c.fillStyle = "#998C79"; c.font = "13px -apple-system,sans-serif";
+  c.textAlign = "center"; c.fillText(msg, w / 2, h / 2); c.textAlign = "left";
+}
+function clearPlot(id, h) {
+  var f = fitCanvas($(id), h);
+  if (!f) return;
+  f.c.clearRect(0, 0, f.w, f.h);
+  f.c.fillStyle = "#998C79"; f.c.font = "13px -apple-system,sans-serif";
+  f.c.textAlign = "center"; f.c.fillText("Reading samples", f.w / 2, f.h / 2); f.c.textAlign = "left";
 }
 
-function drawTrack(pts) {
-  var cv = $("cvTrack");
-  var f = fitCanvas(cv, 170), c = f.c, w = f.w, h = f.h;
+/* Walk every stored sample once and reduce it to what the plots need:
+   a min/max envelope with one slot per screen column, plus per-second RMS. */
+function buildEnvelope(chunks, dur, cols) {
+  var mn = new Float32Array(cols), mx = new Float32Array(cols), has = new Uint8Array(cols);
+  var ema = 1, peak = 0, n = 0;
+  var rough = [], secSq = 0, secN = 0, secIdx = 0;
+  chunks.forEach(function (ch) {
+    for (var i = 0; i < ch.t.length; i++) {
+      var t = ch.t[i];
+      var mag = Math.sqrt(ch.x[i] * ch.x[i] + ch.y[i] * ch.y[i] + ch.z[i] * ch.z[i]) / G;
+      ema += (mag - ema) * 0.05;
+      var hp = mag - ema;
+      n++;
+      var col = Math.floor(t / dur * cols);
+      if (col < 0) col = 0; if (col > cols - 1) col = cols - 1;
+      if (!has[col]) { mn[col] = hp; mx[col] = hp; has[col] = 1; }
+      else { if (hp < mn[col]) mn[col] = hp; if (hp > mx[col]) mx[col] = hp; }
+      var ab = hp < 0 ? -hp : hp; if (ab > peak) peak = ab;
+      secSq += hp * hp; secN++;
+      var sec = Math.floor(t / 1000);
+      while (secIdx < sec) {
+        rough.push(secN ? Math.sqrt(secSq / secN) : 0);
+        secSq = 0; secN = 0; secIdx++;
+      }
+    }
+  });
+  if (secN) rough.push(Math.sqrt(secSq / secN));
+  return { mn: mn, mx: mx, has: has, cols: cols, peak: peak, rough: rough, n: n };
+}
+
+/* Movement: pale band is every reading, solid core is the typical energy per second. */
+function drawAccel(env, rough, dur) {
+  var f = fitCanvas($("cvAccel"), 150);
+  if (!f) return;
+  var c = f.c, w = f.w, h = f.h, mid = h / 2, pad = 14;
   c.clearRect(0, 0, w, h);
-  if (!pts || pts.length < 2) {
-    c.fillStyle = "#998C79"; c.font = "13px -apple-system,sans-serif";
-    c.textAlign = "center"; c.fillText("No GPS fixes in this ride", w / 2, h / 2);
-    c.textAlign = "left"; return;
+  if (!env || !env.n) { emptyPlot(c, w, h, "No accelerometer samples stored"); return; }
+
+  var scale = (mid - pad) / (env.peak || 1);
+  var colW = w / env.cols, i;
+
+  c.fillStyle = "#6A5A4E";
+  for (i = 0; i < env.cols; i++) {
+    if (!env.has[i]) continue;
+    var y0 = mid - env.mx[i] * scale, y1 = mid - env.mn[i] * scale;
+    c.fillRect(i * colW, y0, Math.max(1, colW + 0.5), Math.max(1, y1 - y0));
   }
-  var minLat = 90, maxLat = -90, minLon = 180, maxLon = -180, i;
+
+  // typical energy per second, mirrored around zero, as a pair of edges
+  if (rough && rough.length > 1) {
+    c.strokeStyle = "#F4671F"; c.lineWidth = 1.6; c.lineJoin = "round";
+    var sgn;
+    for (sgn = -1; sgn <= 1; sgn += 2) {
+      c.beginPath();
+      for (i = 0; i < rough.length; i++) {
+        var x = (i * 1000 / dur) * w + (500 / dur) * w;
+        var y = mid - sgn * rough[i] * scale;
+        if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+      }
+      c.stroke();
+    }
+  }
+
+  c.strokeStyle = "#4A4038"; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(0, mid + .5); c.lineTo(w, mid + .5); c.stroke();
+  c.fillStyle = "#998C79"; c.font = "11px -apple-system,sans-serif";
+  c.fillText("+" + env.peak.toFixed(1) + " g", 5, 13);
+  c.fillText("-" + env.peak.toFixed(1) + " g", 5, h - 5);
+}
+
+/* Speed as a line, height as a filled area behind it. */
+function drawSpeedAlt(pts, dur) {
+  var f = fitCanvas($("cvSpeed"), 150);
+  if (!f) return;
+  var c = f.c, w = f.w, h = f.h, pad = 14, i;
+  c.clearRect(0, 0, w, h);
+  if (!pts || pts.length < 2) { emptyPlot(c, w, h, "No GPS fixes in this ride"); return; }
+
+  var xOf = function (p) { return (p.t / dur) * w; };
+  var alts = [], maxSpd = 0;
+  for (i = 0; i < pts.length; i++) {
+    if (pts[i].alt !== null && pts[i].alt !== undefined) alts.push(pts[i].alt);
+    var sp = pts[i].spd;
+    if (sp !== null && sp >= 0 && sp * 3.6 > maxSpd) maxSpd = sp * 3.6;
+  }
+
+  if (alts.length > 1) {
+    var lo = Math.min.apply(null, alts), hi = Math.max.apply(null, alts);
+    var span = Math.max(hi - lo, 5);
+    var altY = function (p) {
+      return h - pad * 0.5 - ((p.alt - lo) / span) * (h - pad * 1.8);
+    };
+    c.fillStyle = "#352D25";
+    c.beginPath(); c.moveTo(0, h);
+    for (i = 0; i < pts.length; i++) {
+      if (pts[i].alt === null || pts[i].alt === undefined) continue;
+      c.lineTo(xOf(pts[i]), altY(pts[i]));
+    }
+    c.lineTo(w, h); c.closePath(); c.fill();
+    c.strokeStyle = "#7A6E5E"; c.lineWidth = 1; c.beginPath();
+    var st = false;
+    for (i = 0; i < pts.length; i++) {
+      if (pts[i].alt === null || pts[i].alt === undefined) continue;
+      if (!st) { c.moveTo(xOf(pts[i]), altY(pts[i])); st = true; }
+      else c.lineTo(xOf(pts[i]), altY(pts[i]));
+    }
+    c.stroke();
+    c.fillStyle = "#998C79"; c.font = "11px -apple-system,sans-serif";
+    c.fillText(Math.round(hi) + " down to " + Math.round(lo) + " m", 5, h - 5);
+  }
+
+  if (maxSpd > 0) {
+    c.strokeStyle = "#F4671F"; c.lineWidth = 2; c.lineJoin = "round";
+    c.beginPath();
+    var started = false;
+    for (i = 0; i < pts.length; i++) {
+      var s = pts[i].spd;
+      if (s === null || s < 0) continue;
+      var y = h - pad - (s * 3.6 / maxSpd) * (h - pad * 2);
+      if (!started) { c.moveTo(xOf(pts[i]), y); started = true; } else c.lineTo(xOf(pts[i]), y);
+    }
+    c.stroke();
+    c.fillStyle = "#F4671F"; c.font = "11px -apple-system,sans-serif";
+    c.textAlign = "right";
+    c.fillText(maxSpd.toFixed(0) + " km/h top", w - 5, 13);
+    c.textAlign = "left";
+  }
+}
+
+function roughColor(u) {
+  var a = [138, 127, 110], b = [244, 103, 31];
+  if (u < 0) u = 0; if (u > 1) u = 1;
+  return "rgb(" + Math.round(a[0] + (b[0] - a[0]) * u) + "," +
+                  Math.round(a[1] + (b[1] - a[1]) * u) + "," +
+                  Math.round(a[2] + (b[2] - a[2]) * u) + ")";
+}
+
+/* Track shape, each segment coloured by how rough that moment was. */
+function drawTrack(pts, rough) {
+  var f = fitCanvas($("cvTrack"), 200);
+  if (!f) return;
+  var c = f.c, w = f.w, h = f.h, i;
+  c.clearRect(0, 0, w, h);
+  if (!pts || pts.length < 2) { emptyPlot(c, w, h, "No GPS fixes in this ride"); return; }
+
+  var minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
   for (i = 0; i < pts.length; i++) {
     if (pts[i].lat < minLat) minLat = pts[i].lat;
     if (pts[i].lat > maxLat) maxLat = pts[i].lat;
     if (pts[i].lon < minLon) minLon = pts[i].lon;
     if (pts[i].lon > maxLon) maxLon = pts[i].lon;
   }
-  var latMid = (minLat + maxLat) / 2;
-  var kx = Math.cos(latMid * Math.PI / 180);
+  var kx = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180);
   var dLat = Math.max(maxLat - minLat, 1e-6);
   var dLon = Math.max((maxLon - minLon) * kx, 1e-6);
-  var pad = 18;
+  var pad = 22;
   var s = Math.min((w - pad * 2) / dLon, (h - pad * 2) / dLat);
   var ox = (w - dLon * s) / 2, oy = (h - dLat * s) / 2;
   function px(p) { return ox + (p.lon - minLon) * kx * s; }
   function py(p) { return h - (oy + (p.lat - minLat) * s); }
 
-  c.strokeStyle = "#F4671F"; c.lineWidth = 2.5;
-  c.lineJoin = "round"; c.lineCap = "round";
-  c.beginPath();
-  for (i = 0; i < pts.length; i++) {
-    if (i === 0) c.moveTo(px(pts[i]), py(pts[i])); else c.lineTo(px(pts[i]), py(pts[i]));
+  var rmax = 0;
+  if (rough) for (i = 0; i < rough.length; i++) if (rough[i] > rmax) rmax = rough[i];
+
+  c.lineWidth = 3.5; c.lineJoin = "round"; c.lineCap = "round";
+  for (i = 1; i < pts.length; i++) {
+    var u = 0;
+    if (rmax > 0 && rough) {
+      var sec = Math.floor(pts[i].t / 1000);
+      if (sec >= 0 && sec < rough.length) u = rough[sec] / rmax;
+    }
+    c.strokeStyle = rmax > 0 ? roughColor(u) : "#F4671F";
+    c.beginPath();
+    c.moveTo(px(pts[i - 1]), py(pts[i - 1]));
+    c.lineTo(px(pts[i]), py(pts[i]));
+    c.stroke();
   }
-  c.stroke();
   c.fillStyle = "#7BC28C";
-  c.beginPath(); c.arc(px(pts[0]), py(pts[0]), 4.5, 0, 6.2832); c.fill();
+  c.beginPath(); c.arc(px(pts[0]), py(pts[0]), 5, 0, 6.2832); c.fill();
   c.fillStyle = "#F0E7D7";
-  c.beginPath(); c.arc(px(pts[pts.length - 1]), py(pts[pts.length - 1]), 4.5, 0, 6.2832); c.fill();
+  c.beginPath(); c.arc(px(pts[pts.length - 1]), py(pts[pts.length - 1]), 5, 0, 6.2832); c.fill();
 }
 
 /* ----------------------------------------------------------- rides list */
@@ -876,7 +1038,7 @@ function renderRides() {
       b.querySelector(".facts").innerHTML =
         hms(r.dur || 0) + "<i>|</i>" + ((r.dist || 0) / 1000).toFixed(2) + " km<i>|</i>" +
         (r.rms || 0).toFixed(2) + " g rms";
-      b.onclick = function () { if (!editMode) openRide(r); };
+      b.onclick = function () { openRide(r); };
       li.appendChild(b);
       var dbtn = document.createElement("button");
       dbtn.className = "del";
@@ -893,36 +1055,72 @@ function renderRides() {
 
 /* ------------------------------------------------------------- detail */
 var openR = null, openPts = null;
+
+function bySeq(a, b) { return a.k < b.k ? -1 : 1; }
+
 function openRide(r) {
-  openR = r;
-  $("sheetTitle").textContent = dateLabel(r.startedAt);
-  var cells = [
-    [hms(r.dur || 0), "duration"],
-    [((r.dist || 0) / 1000).toFixed(2) + " km", "distance"],
-    [(r.drop || 0) + " m", "descended"],
-    [(r.maxSpd || 0).toFixed(1) + " km/h", "top speed"],
-    [(r.rms || 0).toFixed(3) + " g", "average roughness"],
-    [(r.peak || 0).toFixed(2) + " g", "hardest single hit"],
-    [(r.nAccel || 0).toLocaleString(), "accel samples"],
-    [(r.hz || 0) + " Hz", "sample rate"]
-  ];
-  $("sheetGrid").innerHTML = cells.map(function (c) {
-    return '<div class="cell"><div class="v num">' + c[0] + '</div><div class="k">' + c[1] + '</div></div>';
-  }).join("");
-  $("hAccel").textContent = (r.nAccel || 0).toLocaleString() + " rows";
-  $("hGps").textContent = (r.nGps || 0) + " fixes";
-  $("sheet").classList.add("on");
-  drawRough(r.rough);
-  byRide("gps", r.id).then(function (chunks) {
-    chunks.sort(function (a, b) { return a.k < b.k ? -1 : 1; });
-    openPts = [];
-    chunks.forEach(function (ch) { openPts = openPts.concat(ch.p); });
-    drawTrack(openPts);
-    $("trackCap").textContent = openPts.length
-      ? "Track shape from " + openPts.length + " GPS fixes. Green is the start."
-      : "No GPS fixes were stored for this ride.";
+  try {
+    openR = r; openPts = null;
+    $("sheetTitle").textContent = dateLabel(r.startedAt);
+    var cells = [
+      [hms(r.dur || 0), "duration"],
+      [((r.dist || 0) / 1000).toFixed(2) + " km", "distance"],
+      [(r.drop || 0) + " m", "descended"],
+      [(r.maxSpd || 0).toFixed(1) + " km/h", "top speed"],
+      [(r.rms || 0).toFixed(3) + " g", "average roughness"],
+      [(r.peak || 0).toFixed(2) + " g", "hardest single hit"],
+      [(r.nAccel || 0).toLocaleString(), "accel samples"],
+      [(r.hz || 0) + " Hz", "sample rate"]
+    ];
+    $("sheetGrid").innerHTML = cells.map(function (cc) {
+      return '<div class="cell"><div class="v num">' + cc[0] + '</div><div class="k">' + cc[1] + '</div></div>';
+    }).join("");
+    $("hAccel").textContent = (r.nAccel || 0).toLocaleString() + " rows";
+    $("hGps").textContent = (r.nGps || 0) + " fixes";
+    $("sheet").classList.add("on");
+    $("capAccel").textContent = "";
+    $("capSpeed").textContent = "";
+    $("trackCap").textContent = "";
+    clearPlot("cvAccel", 150); clearPlot("cvSpeed", 150); clearPlot("cvTrack", 200);
+    loadRide(r);
+  } catch (e) {
+    toast("Could not open ride: " + (e && e.message ? e.message : e));
+  }
+}
+
+function loadRide(r) {
+  Promise.all([byRide("accel", r.id), byRide("gps", r.id)]).then(function (res) {
+    if (!openR || openR.id !== r.id) return;          // sheet closed while loading
+    var aChunks = res[0].sort(bySeq), gChunks = res[1].sort(bySeq);
+
+    var pts = [];
+    gChunks.forEach(function (ch) { pts = pts.concat(ch.p); });
+    openPts = pts;
+
+    var dur = Math.max(r.dur || 0, 1);
+    var cols = Math.max(60, Math.round($("cvAccel").clientWidth || 340));
+    var env = buildEnvelope(aChunks, dur, cols);
+    var rough = (r.rough && r.rough.length) ? r.rough : env.rough;
+
+    drawAccel(env, rough, dur);
+    drawSpeedAlt(pts, dur);
+    drawTrack(pts, rough);
+
+    $("capAccel").textContent = env.n
+      ? "Every one of the " + env.n.toLocaleString() + " readings, gravity removed. The grey " +
+        "band is the full swing, the orange edges are the typical energy each second."
+      : "Nothing was stored for this ride.";
+    $("capSpeed").textContent = pts.length > 1
+      ? "Speed in orange, ground height as the shaded area behind it."
+      : "";
+    $("trackCap").textContent = pts.length > 1
+      ? "Green is the start. Brighter orange means the trail was rougher there."
+      : "";
+  }).catch(function (e) {
+    toast("Could not read ride data: " + (e && e.message ? e.message : e));
   });
 }
+
 $("sheetBack").onclick = function () { $("sheet").classList.remove("on"); openR = null; };
 $("sheetDel").onclick = function () { if (openR) confirmDelete(openR); };
 
@@ -1024,7 +1222,8 @@ function renderSetup() {
 
   var raw = $("sRaw");
   if (lastRaw) {
-    raw.textContent = lastRaw.x.toFixed(2) + "  " + lastRaw.y.toFixed(2) + "  " + lastRaw.z.toFixed(2);
+    raw.textContent = "x " + lastRaw.x.toFixed(2) + ", y " + lastRaw.y.toFixed(2) +
+                      ", z " + lastRaw.z.toFixed(2);
     raw.className = "rv ok";
   } else {
     raw.textContent = mEvents ? mEvents + " empty events" : "nothing yet";
@@ -1109,7 +1308,12 @@ function go(id) {
   });
 }
 Array.prototype.slice.call(document.querySelectorAll(".tab")).forEach(function (t) {
-  t.onclick = function () { go(t.getAttribute("data-go")); };
+  t.onclick = function () {
+    var id = t.getAttribute("data-go");
+    go(id);
+    if (id === "scRides") renderRides();   // sparklines need a visible, sized canvas
+    if (id === "scSetup") renderSetup();
+  };
 });
 $("btnRec").onclick = function () { R.on ? stop() : start(); };
 
@@ -1133,6 +1337,10 @@ document.addEventListener("visibilitychange", function () {
 
 window.addEventListener("error", function (e) {
   toast("Error: " + (e.message || "unknown"));
+});
+window.addEventListener("unhandledrejection", function (e) {
+  var r = e.reason;
+  toast("Error: " + (r && r.message ? r.message : r));
 });
 
 /* --------------------------------------------------------------- boot */

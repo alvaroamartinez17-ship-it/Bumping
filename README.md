@@ -38,6 +38,20 @@ see where the chain breaks:
 - *Readings arrive but the live reading is empty* — events are firing without values, which
   on iOS means the permission is half granted. Same reset as above.
 
+## What a ride shows
+
+Tap any row on the Rides tab. Three charts, all drawn from the samples on the phone:
+
+- **Movement** — the grey band is the full swing of the accelerometer across the whole run,
+  one column per pixel of screen. The orange edges are the typical energy in each second, so
+  a wide grey band with narrow orange edges means a few big hits on an otherwise calm
+  stretch, and both widening together means sustained chatter.
+- **Speed and height** — speed in orange, ground height as the shaded area behind it.
+- **Track** — the shape of the run, each segment coloured by how rough it was there. Green
+  dot is the start. Brighter orange is rougher trail.
+
+No map tiles are fetched, so all of this works with no signal.
+
 ## Deleting rides
 
 - One ride: open it and tap Delete, or tap Edit on the Rides tab for a delete button on
