@@ -190,6 +190,13 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   background:var(--panel);font-size:15px;text-align:center;
 }
 .big.go{background:var(--orange);color:#1A1105;border-color:var(--orange);font-weight:600}
+a.big{display:block;text-decoration:none;color:var(--cream)}
+#expText{
+  display:block;width:calc(100% - var(--pad) * 2);margin:16px var(--pad) 0;height:130px;
+  background:var(--panel);color:var(--dust);border:1px solid var(--rule);border-radius:3px;
+  font-family:ui-monospace,Menlo,monospace;font-size:11px;padding:9px;
+  -webkit-user-select:text;user-select:text;
+}
 .tip{padding:18px var(--pad) 30px;font-size:13px;color:var(--dust);line-height:1.6}
 .tip p{margin:0 0 11px}
 .tip b{color:var(--cream);font-weight:600}
@@ -242,7 +249,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 
   <div class="strip">
     <button class="sensor" id="chipMotion"><i class="dot" id="dMotion"></i><span id="tMotion">Motion starting</span></button>
-    <span class="sensor"><i class="dot" id="dGps"></i><span id="tGps">GPS off</span></span>
+    <button class="sensor" id="chipGps"><i class="dot" id="dGps"></i><span id="tGps">GPS off</span></button>
     <span class="right" id="tStore"></span>
   </div>
 
@@ -303,6 +310,8 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
       <div class="row"><span>Secure connection</span><span class="rv" id="sHttps"></span></div>
       <div class="row"><span>Launched from home screen</span><span class="rv" id="sStandalone"></span></div>
       <div class="row"><span>GPS</span><span class="rv" id="sGps"></span></div>
+      <div class="row"><span>Last GPS fix</span><span class="rv" id="sFixAge"></span></div>
+      <div class="row"><span>GPS restarts</span><span class="rv" id="sGpsRe"></span></div>
       <div class="row"><span>Offline copy installed</span><span class="rv" id="sSw"></span></div>
       <div class="row"><span>Stored on this phone</span><span class="rv" id="sDisk"></span></div>
     </div>
@@ -353,11 +362,42 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
     <p class="plotcap" id="trackCap"></p>
 
     <div class="acts">
+      <button class="act" data-x="summary">Summary JSON, small and easy to send<span class="hint" id="hSum"></span></button>
       <button class="act" data-x="accel">Export accelerometer CSV<span class="hint" id="hAccel"></span></button>
       <button class="act" data-x="gps">Export GPS CSV<span class="hint" id="hGps"></span></button>
       <button class="act" data-x="gpx">Export GPX track<span class="hint">for maps</span></button>
       <button class="act" data-x="json">Export everything as JSON<span class="hint">raw</span></button>
     </div>
+  </div>
+</div>
+
+<div class="sheet" id="expSheet">
+  <div class="sheetbar">
+    <button id="expBack">Close</button>
+    <span class="t">Save the file</span>
+    <span style="width:46px"></span>
+  </div>
+  <div class="sheetbody">
+    <div class="rows">
+      <div class="row"><span>File</span><span class="rv" id="expName"></span></div>
+      <div class="row"><span>Size</span><span class="rv" id="expSize"></span></div>
+      <div class="row"><span>Automatic save</span><span class="rv no" id="expWhy"></span></div>
+    </div>
+    <div class="btnrow">
+      <button class="big go" id="expShare">Save to Files</button>
+      <a class="big" id="expDl" download>Download it</a>
+      <button class="big" id="expCopy">Copy all of it</button>
+    </div>
+    <div class="tip">
+      <p><b>Save to Files</b> opens the iOS share sheet. Scroll down the icons and pick
+      Save to Files, then On My iPhone. That is the one that leaves a real file you can
+      attach later.</p>
+      <p><b>Download it</b> works in Safari but does nothing when the app is launched from
+      the home screen, because a home screen app has no download manager.</p>
+      <p><b>Copy all of it</b> puts the whole file on the clipboard, which you can paste
+      into Notes or Mail. Best for the summary, awkward for a long raw export.</p>
+    </div>
+    <textarea id="expText" readonly></textarea>
   </div>
 </div>
 
@@ -545,6 +585,7 @@ var R = {
   vSum: 0, lSum: 0, vlN: 0,             // vertical and lateral energy, split by gravity
   maxTurn: 0, turnNow: 0,
   air: null,
+  gpsDrops: 0,
   ring: new Float32Array(220), ringI: 0,
   hzCount: 0, hz: 0, hzT: 0,
   gaps: 0,
@@ -560,6 +601,7 @@ function resetRecorder() {
   R.ema = 1; R.sumSq = 0; R.nSq = 0; R.peak = 0;
   R.vSum = 0; R.lSum = 0; R.vlN = 0; R.maxTurn = 0; R.turnNow = 0;
   R.air = makeAirDetector();
+  R.gpsDrops = 0;
   R.secBucketSq = 0; R.secBucketN = 0; R.secIdx = 0; R.rough = [];
   R.ring = new Float32Array(220); R.ringI = 0;
   R.hzCount = 0; R.hz = 0; R.gaps = 0;
@@ -642,6 +684,9 @@ function onMotion(e) {
 
 function onFix(pos) {
   var c = pos.coords;
+  lastFixAt = Date.now();
+  gpsErrs = 0;
+  if (gpsRetryT) { clearTimeout(gpsRetryT); gpsRetryT = null; }
   gpsNote = "fix to " + Math.round(c.accuracy) + " m";
   setDot($("dGps"), c.accuracy <= 15 ? "live" : "warn",
     "GPS " + Math.round(c.accuracy) + " m", $("tGps"));
@@ -700,10 +745,12 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.6";
+var VERSION = "1.8";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
+var gpsErrs = 0, gpsRestarts = 0, lastFixAt = 0, gpsRetryT = null,
+    gpsIdleT = null, gpsDead = false;
 
 function attachMotion() {
   if (motionAttached) return;
@@ -761,19 +808,90 @@ function askMotion() {
     return false;
   });
 }
+$("chipGps").onclick = function () {
+  if (gpsDead) { go("scSetup"); toast("Location is refused for this app. Setup explains how."); return; }
+  gpsErrs = 0;
+  restartGps("tap");
+  toast("Looking for a fix");
+};
 $("chipMotion").onclick = function () {
   askMotion().then(function (ok) {
     if (!ok) { go("scSetup"); toast("Motion is blocked. Setup explains how to reset it."); }
   });
 };
+/* watchPosition is fragile on iOS: a timeout under tree cover, a suspended tab, or
+   the screen sleeping between runs can kill the watch for good. The old code marked
+   the dot red and left the handle set, so nothing ever restarted it and GPS stayed
+   dead until the app was reloaded. Now every failure tears the watch down and
+   builds a new one, and a watchdog catches the silent deaths that raise no error. */
+var GPS_OPTS = { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 };
+
 function startGps() {
-  if (gpsWatch !== null || !navigator.geolocation) return;
-  gpsNote = "searching";
+  if (!navigator.geolocation) { gpsNote = "no geolocation in this browser"; return; }
+  if (gpsWatch !== null) return;
+  if (gpsIdleT) { clearTimeout(gpsIdleT); gpsIdleT = null; }
+  gpsNote = gpsErrs ? "searching, retry " + gpsErrs : "searching";
   setDot($("dGps"), "warn", "GPS searching", $("tGps"));
-  gpsWatch = navigator.geolocation.watchPosition(onFix, function (err) {
-    gpsNote = err.code === 1 ? "permission refused" : (err.code === 3 ? "timed out" : "unavailable");
-    setDot($("dGps"), "bad", err.code === 1 ? "GPS blocked" : "GPS lost", $("tGps"));
-  }, { enableHighAccuracy: true, maximumAge: 0, timeout: 25000 });
+  lastFixAt = Date.now();                 // give the new watch a fresh grace period
+  try {
+    gpsWatch = navigator.geolocation.watchPosition(onFix, onGpsErr, GPS_OPTS);
+  } catch (e) {
+    gpsNote = "watch failed: " + (e && e.name ? e.name : e);
+  }
+}
+
+function stopGps() {
+  if (gpsWatch !== null) {
+    try { navigator.geolocation.clearWatch(gpsWatch); } catch (e) { /* already gone */ }
+    gpsWatch = null;
+  }
+  if (gpsRetryT) { clearTimeout(gpsRetryT); gpsRetryT = null; }
+}
+
+function restartGps(why) {
+  if (gpsDead) return;
+  gpsRestarts++;
+  if (R.on) R.gpsDrops++;
+  gpsNote = "restarting after " + why;
+  stopGps();
+  startGps();
+}
+
+function onGpsErr(err) {
+  if (err && err.code === 1) {            // refused: retrying will not help
+    gpsDead = true;
+    gpsNote = "permission refused";
+    setDot($("dGps"), "bad", "GPS blocked", $("tGps"));
+    stopGps();
+    return;
+  }
+  gpsErrs++;
+  gpsNote = (err && err.code === 3 ? "timed out" : "signal lost") + ", retry " + gpsErrs;
+  setDot($("dGps"), "warn", "GPS lost", $("tGps"));
+  if (gpsRetryT) return;
+  var wait = Math.min(2000 * gpsErrs, 15000);   // back off, but never give up
+  gpsRetryT = setTimeout(function () {
+    gpsRetryT = null;
+    restartGps("error");
+  }, wait);
+}
+
+/* Some failures raise no error at all: fixes simply stop arriving. */
+function gpsWatchdog() {
+  if (gpsDead || gpsWatch === null || gpsRetryT) return;
+  var silent = Date.now() - lastFixAt;
+  if (silent > (R.on ? 15000 : 45000)) restartGps("silence");
+}
+
+/* A high accuracy watch left running between rides is a real drain on a 6s, so
+   release it once the phone has been sitting idle, and wake it on demand. */
+function gpsIdleRelease() {
+  if (gpsIdleT) clearTimeout(gpsIdleT);
+  gpsIdleT = setTimeout(function () {
+    gpsIdleT = null;
+    if (!R.on) { stopGps(); gpsNote = "released to save battery, tap to wake"; 
+                 setDot($("dGps"), "", "GPS asleep", $("tGps")); }
+  }, 180000);
 }
 
 /* -------------------------------------------------------- start / stop */
@@ -818,9 +936,11 @@ function stop() {
     maxTurn: R.maxTurn ? Math.round(R.maxTurn) : null,
     jumps: R.air ? R.air.finish() : [],
     airMs: R.air ? Math.round(R.air.airMs) : 0,
+    gpsDrops: R.gpsDrops,
     gaps: R.gaps,
     rough: R.rough
   };
+  gpsIdleRelease();
   put("rides", ride).then(function () {
     $("btnRec").classList.remove("stop");
     $("recLabel").textContent = "Start recording";
@@ -839,6 +959,7 @@ function loop(ts) {
   if (ts - R.hzT > 1000) { R.hz = R.hzCount; R.hzCount = 0; R.hzT = ts; }
   if (ts - lastPaint < 100) { drawTrace(); return; }
   lastPaint = ts;
+  gpsWatchdog();
 
   if (R.on) $("clock").textContent = hms(Date.now() - R.t0);
   $("mDist").textContent = (R.dist / 1000).toFixed(2);
@@ -1221,7 +1342,7 @@ function renderRides() {
 }
 
 /* ------------------------------------------------------------- detail */
-var openR = null, openPts = null, openChunks = null;
+var openR = null, openPts = null, openChunks = null, openJumps = null, openRough = null;
 
 function bySeq(a, b) { return a.k < b.k ? -1 : 1; }
 
@@ -1232,7 +1353,7 @@ function addCell(v, k) { $("sheetGrid").innerHTML += cellHtml(v, k); }
 
 function openRide(r) {
   try {
-    openR = r; openPts = null; openChunks = null;
+    openR = r; openPts = null; openChunks = null; openJumps = null; openRough = null;
     $("sheetTitle").textContent = dateLabel(r.startedAt);
     var cells = [
       [hms(r.dur || 0), "duration"],
@@ -1249,11 +1370,13 @@ function openRide(r) {
       cells.push([r.lRms.toFixed(3) + " g", "lateral roughness"]);
     }
     if (r.maxTurn) cells.push([r.maxTurn + " deg/s", "fastest rotation"]);
+    if (r.gpsDrops) cells.push([r.gpsDrops, "GPS restarts during the ride"]);
     $("sheetGrid").innerHTML = cells.map(function (cc) {
       return cellHtml(cc[0], cc[1]);
     }).join("");
     $("hAccel").textContent = (r.nAccel || 0).toLocaleString() + " rows";
     $("hGps").textContent = (r.nGps || 0) + " fixes";
+    $("hSum").textContent = "recommended";
     $("sheet").classList.add("on");
     $("capAccel").textContent = "";
     $("capSpeed").textContent = "";
@@ -1281,6 +1404,7 @@ function loadRide(r) {
     var rough = (r.rough && r.rough.length) ? r.rough : env.rough;
 
     var jumps = (r.jumps !== undefined && r.jumps !== null) ? r.jumps : env.jumps;
+    openJumps = jumps; openRough = rough;
     var airMs = (r.airMs !== undefined && r.airMs !== null) ? r.airMs : env.airMs;
 
     drawAccel(env, rough, dur, jumps);
@@ -1357,43 +1481,103 @@ function fileBase(r) {
   return "bumplog-" + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) +
          "-" + pad2(d.getHours()) + pad2(d.getMinutes());
 }
-/* iOS only allows the share sheet inside a user gesture, so every file has to be
-   assembled synchronously on the tap. The chunks are already in memory from when
-   the ride was opened; nothing here awaits. Blob takes an array of strings, which
-   keeps a long ride from ever existing as one giant concatenated string. */
+/* Getting a file off an iPhone from a web app is the fiddliest part of this whole
+   project. The share sheet is the only route that leaves a real file in the Files
+   app, and it only works inside a user gesture, so every export is assembled
+   synchronously on the tap. When it does not work we say why and offer the
+   alternatives rather than failing in silence. */
+var lastExport = null;
+
+function makeFile(blob, name, mime) {
+  try { return new File([blob], name, { type: mime }); } catch (e) { return null; }
+}
+
 function deliver(name, parts, mime) {
   var blob;
   try {
     blob = new Blob(parts, { type: mime + ";charset=utf-8" });
   } catch (e) {
-    toast("File too large to build: " + (e && e.message ? e.message : e));
+    toast("Could not build the file: " + (e && e.message ? e.message : e));
     return;
   }
-  var file = null;
-  try { file = new File([blob], name, { type: mime }); } catch (e) { file = null; }
+  lastExport = { blob: blob, name: name, parts: parts, mime: mime };
 
-  if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
-    try {
-      navigator.share({ files: [file] }).then(null, function (err) {
-        if (err && err.name === "AbortError") return;      // user tapped cancel
-        saveBlob(blob, name, err);
-      });
-      return;
-    } catch (e) { /* fall through to the download link */ }
+  if (!navigator.share) { showExport("this browser has no share support"); return; }
+
+  // iOS refuses some types outright; plain text is accepted everywhere
+  var file = makeFile(blob, name, mime), why = "";
+  var allowed = true;
+  if (navigator.canShare) {
+    try { allowed = file && navigator.canShare({ files: [file] }); } catch (e) { allowed = false; }
+    if (!allowed) {
+      var alt = makeFile(blob, name, "text/plain");
+      try { allowed = alt && navigator.canShare({ files: [alt] }); } catch (e) { allowed = false; }
+      if (allowed) file = alt; else why = "iOS refused this file type";
+    }
   }
-  saveBlob(blob, name, null);
+  if (!file) { showExport("could not wrap the data as a file"); return; }
+  if (!allowed) { showExport(why); return; }
+
+  try {
+    var p = navigator.share({ files: [file] });
+    if (p && p.then) {
+      p.then(null, function (err) {
+        if (err && err.name === "AbortError") return;      // user cancelled, nothing wrong
+        showExport("share failed, " + (err && err.name ? err.name : err));
+      });
+    }
+  } catch (e) {
+    showExport("share threw " + (e && e.name ? e.name : e));
+  }
 }
 
-function saveBlob(blob, name, shareErr) {
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement("a");
-  a.href = url; a.download = name; a.rel = "noopener";
-  document.body.appendChild(a); a.click();
-  setTimeout(function () {
-    if (a.parentNode) document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, 8000);
-  if (shareErr) toast("Share refused (" + (shareErr.name || shareErr) + "), used a download instead");
+function showExport(why) {
+  if (!lastExport) return;
+  var kb = lastExport.blob.size / 1024;
+  $("expName").textContent = lastExport.name;
+  $("expSize").textContent = kb > 1024 ? (kb / 1024).toFixed(2) + " MB" : kb.toFixed(0) + " KB";
+  $("expWhy").textContent = why;
+  var url = URL.createObjectURL(lastExport.blob);
+  $("expDl").href = url;
+  $("expDl").setAttribute("download", lastExport.name);
+  var head = "";
+  for (var i = 0; i < lastExport.parts.length && head.length < 4000; i++) head += lastExport.parts[i];
+  $("expText").value = head.slice(0, 4000) + (head.length > 4000 ? "\n... rest of the file omitted from this preview" : "");
+  $("expSheet").classList.add("on");
+}
+$("expBack").onclick = function () { $("expSheet").classList.remove("on"); };
+$("expShare").onclick = function () {
+  if (!lastExport) return;
+  var f = makeFile(lastExport.blob, lastExport.name, lastExport.mime) ||
+          makeFile(lastExport.blob, lastExport.name, "text/plain");
+  if (!f || !navigator.share) { toast("Sharing is not available here"); return; }
+  try {
+    navigator.share({ files: [f] }).then(function () {
+      $("expSheet").classList.remove("on");
+    }, function (err) {
+      if (!err || err.name !== "AbortError") toast("Still refused: " + (err && err.name ? err.name : err));
+    });
+  } catch (e) { toast("Share threw " + (e && e.name ? e.name : e)); }
+};
+$("expCopy").onclick = function () {
+  if (!lastExport) return;
+  var text = lastExport.parts.join("");
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function () {
+      toast("Copied, " + Math.round(text.length / 1024) + " KB on the clipboard");
+    }, function () { copyBySelection(text); });
+  } else copyBySelection(text);
+};
+function copyBySelection(text) {
+  var ta = $("expText");
+  var was = ta.value;
+  ta.value = text;
+  ta.focus();
+  ta.setSelectionRange(0, ta.value.length);
+  var ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  ta.value = was;
+  toast(ok ? "Copied" : "Could not copy. Use Save to Files instead.");
 }
 
 function num(arr, i) {
@@ -1418,37 +1602,70 @@ function accelCsvParts(chunks) {
   return parts;
 }
 
-function jsonParts(r, pts, chunks) {
-  var parts = ['{\n"bumplog": ' + JSON.stringify(VERSION) +
+function jsonHead(r, pts, extra) {
+  return '{\n"bumplog": ' + JSON.stringify(VERSION) +
+    ',\n"kind": ' + JSON.stringify(extra) +
     ',\n"units": ' + JSON.stringify({
       t_ms: "milliseconds since the ride started",
       ax_ay_az: "m/s^2, gravity included, phone frame",
       lin: "m/s^2, gravity removed by iOS",
       rot: "degrees per second",
       gps_alt: "metres", gps_spd: "m/s", gps_acc: "metres",
-      roughness: "g, RMS of the high-passed magnitude"
+      roughness: "g, RMS of the high-passed magnitude, one value per second"
     }) +
     ',\n"ride": ' + JSON.stringify(r) +
     ',\n"gps": ' + JSON.stringify(pts) +
-    ',\n"accelColumns": ' + JSON.stringify(ACCEL_COLS) +
-    ',\n"accel": ['];
+    ',\n"accelColumns": ' + JSON.stringify(ACCEL_COLS);
+}
+
+function rowText(ch, i) {
+  return "[" + ch.t[i] + "," +
+    num(ch.x, i) + "," + num(ch.y, i) + "," + num(ch.z, i) + "," +
+    num(ch.lx, i) + "," + num(ch.ly, i) + "," + num(ch.lz, i) + "," +
+    num(ch.ra, i) + "," + num(ch.rb, i) + "," + num(ch.rg, i) + "]";
+}
+
+function jsonParts(r, pts, chunks) {
+  var parts = [jsonHead(r, pts, "full") + ',\n"accel": ['];
   var buf = [], first = true, i;
   for (var c = 0; c < chunks.length; c++) {
     var ch = chunks[c];
     for (i = 0; i < ch.t.length; i++) {
-      buf.push("[" + ch.t[i] + "," +
-        num(ch.x, i) + "," + num(ch.y, i) + "," + num(ch.z, i) + "," +
-        num(ch.lx, i) + "," + num(ch.ly, i) + "," + num(ch.lz, i) + "," +
-        num(ch.ra, i) + "," + num(ch.rb, i) + "," + num(ch.rg, i) + "]");
-      if (buf.length >= 2000) {
-        parts.push((first ? "" : ",") + buf.join(","));
-        first = false; buf = [];
-      }
+      buf.push(rowText(ch, i));
+      if (buf.length >= 2000) { parts.push((first ? "" : ",") + buf.join(",")); first = false; buf = []; }
     }
   }
   if (buf.length) parts.push((first ? "" : ",") + buf.join(","));
   parts.push("]\n}\n");
   return parts;
+}
+
+/* Everything except the raw stream, plus 1.5 s of raw either side of each jump so
+   the air detection can still be checked. Small enough to move around easily. */
+function summaryParts(r, pts, chunks, jumps, rough) {
+  var win = [], i, c;
+  if (jumps && jumps.length) {
+    for (c = 0; c < chunks.length; c++) {
+      var ch = chunks[c];
+      for (i = 0; i < ch.t.length; i++) {
+        var t = ch.t[i];
+        for (var j = 0; j < jumps.length; j++) {
+          if (t > jumps[j].t - 1500 && t < jumps[j].t + jumps[j].dur + 1500) {
+            win.push(rowText(ch, i));
+            break;
+          }
+        }
+      }
+    }
+  }
+  return [
+    jsonHead(r, pts, "summary") +
+    ',\n"roughnessPerSecond": ' + JSON.stringify(rough ? rough.map(function (v) {
+      return Math.round(v * 1000) / 1000;
+    }) : []) +
+    ',\n"jumps": ' + JSON.stringify(jumps || []) +
+    ',\n"jumpWindows": [' + win.join(",") + ']\n}\n'
+  ];
 }
 
 Array.prototype.slice.call(document.querySelectorAll(".act[data-x]")).forEach(function (btn) {
@@ -1465,6 +1682,12 @@ Array.prototype.slice.call(document.querySelectorAll(".act[data-x]")).forEach(fu
       deliver(base + ".gpx", [gpxDoc(openR, openPts)], "application/gpx+xml"); return;
     }
     if (!openChunks) { toast("Still reading the samples, give it a second"); return; }
+    if (kind === "summary") {
+      deliver(base + "-summary.json",
+              summaryParts(openR, openPts || [], openChunks, openJumps, openRough),
+              "application/json");
+      return;
+    }
     if (kind === "accel") {
       deliver(base + "-accel.csv", accelCsvParts(openChunks), "text/csv"); return;
     }
@@ -1517,6 +1740,17 @@ function renderSetup() {
   var g = $("sGps");
   g.textContent = gpsNote;
   g.className = "rv " + (gpsNote.indexOf("fix") === 0 ? "ok" : "no");
+
+  var fa = $("sFixAge");
+  if (!lastFixAt) { fa.textContent = "none yet"; fa.className = "rv no"; }
+  else {
+    var age = Math.round((Date.now() - lastFixAt) / 1000);
+    fa.textContent = age + " s ago";
+    fa.className = "rv " + (age < 10 ? "ok" : "no");
+  }
+  var gr = $("sGpsRe");
+  gr.textContent = gpsRestarts + (gpsWatch === null ? ", watch not running" : "");
+  gr.className = "rv " + (gpsWatch !== null || gpsDead ? "" : "no");
 
   yn($("sSw"), !!(navigator.serviceWorker && navigator.serviceWorker.controller),
      "yes, works offline", "not yet");
@@ -1606,6 +1840,9 @@ function updateStorage() {
 }
 
 document.addEventListener("visibilitychange", function () {
+  if (!document.hidden && !gpsDead && gpsWatch !== null && Date.now() - lastFixAt > 10000) {
+    restartGps("wake");            // iOS suspends the watch while the app is away
+  }
   if (document.hidden && R.on) R.gaps++;
   else if (!document.hidden && R.on && R.gaps) {
     toast("Recording paused while the screen was off. Set Auto-Lock to Never.");

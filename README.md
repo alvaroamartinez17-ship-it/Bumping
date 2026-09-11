@@ -77,6 +77,23 @@ fooling it, that is the place to adjust:
     LAND_G 1.6 g   how hard a landing must be
     GAP_MS 250     ignore a new jump this soon after the last
 
+## If GPS stops working
+
+The watch iOS gives a web app is fragile. A timeout under tree cover, the screen sleeping
+between runs, or the app being backgrounded can all kill it, sometimes without raising any
+error at all. The app now handles that itself:
+
+- any error tears the watch down and builds a new one, backing off from 2 up to 15 seconds
+- a watchdog restarts the watch if no fix arrives for 15 seconds while recording, or 45
+  seconds while idle
+- returning to the app after more than 10 seconds away forces a fresh watch
+- a refused permission stops the retries instead of looping forever
+- the watch is released after 3 minutes idle to save battery, and the GPS chip at the top
+  of the screen wakes it again on a tap
+
+Setup shows how long ago the last fix arrived and how many restarts have happened. A ride
+that needed restarts records the count, shown on its detail screen.
+
 ## Deleting rides
 
 - One ride: open it and tap Delete, or tap Edit on the Rides tab for a delete button on
@@ -122,8 +139,20 @@ no value. Roughly 1 row per second.
 where iOS gave no value) and a `units` block. This is the one to send if you want the data
 analysed somewhere else.
 
-Exports are built the moment you tap, because iOS only permits the share sheet inside a
-user gesture. If the sheet still says "Reading samples", wait a second and tap again.
+`*-summary.json` — the same thing without the raw 60 Hz stream, but keeping per-second
+roughness and 1.5 seconds of raw samples either side of every detected jump. A ten minute
+ride is about 110 KB instead of 2 MB. This is the one to send.
+
+### Getting the file off the phone
+
+Tap an export and iOS should open the share sheet. Scroll the row of icons and choose
+**Save to Files**, then On My iPhone. That leaves a real file you can attach later.
+
+If the share sheet does not appear, a rescue screen opens saying what was refused, and
+offers three routes: Save to Files again, a plain download link, and copy the whole file to
+the clipboard. The download link only works when the app is open in Safari, because an app
+launched from the home screen has no download manager. That is an iOS limitation, not a bug
+in the app.
 
 The roughness number is the RMS of |acceleration| after a slow high-pass, in g. Taking the
 magnitude makes it independent of how the phone is mounted, so two runs compare even if you
