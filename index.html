@@ -365,11 +365,11 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
     <p class="plotcap" id="trackCap"></p>
 
     <div class="acts">
-      <button class="act" data-x="summary">Summary JSON, small and easy to send<span class="hint" id="hSum"></span></button>
-      <button class="act" data-x="accel">Export accelerometer CSV<span class="hint" id="hAccel"></span></button>
-      <button class="act" data-x="gps">Export GPS CSV<span class="hint" id="hGps"></span></button>
-      <button class="act" data-x="gpx">Export GPX track<span class="hint">for maps</span></button>
-      <button class="act" data-x="json">Export everything as JSON<span class="hint">raw</span></button>
+      <button class="act" data-x="csvsec">Summary CSV, one row per second<span class="hint" id="hSec"></span></button>
+      <button class="act" data-x="csvall">Everything as one CSV<span class="hint" id="hAll"></span></button>
+      <button class="act" data-x="gpx">GPX track<span class="hint">for maps</span></button>
+      <button class="act" data-x="summary">Summary JSON<span class="hint" id="hSum"></span></button>
+      <button class="act" data-x="json">Everything as JSON<span class="hint">raw</span></button>
     </div>
   </div>
 </div>
@@ -753,7 +753,7 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.9";
+var VERSION = "1.10";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
@@ -1419,9 +1419,9 @@ function openRide(r) {
     $("sheetGrid").innerHTML = cells.map(function (cc) {
       return cellHtml(cc[0], cc[1]);
     }).join("");
-    $("hAccel").textContent = (r.nAccel || 0).toLocaleString() + " rows";
-    $("hGps").textContent = (r.nGps || 0) + " fixes";
-    $("hSum").textContent = "recommended";
+    $("hSum").textContent = "";
+    $("hSec").textContent = "recommended";
+    $("hAll").textContent = (r.nAccel || 0).toLocaleString() + " rows";
     $("sheet").classList.add("on");
     $("capAccel").textContent = "";
     $("capSpeed").textContent = "";
@@ -1740,6 +1740,101 @@ function jsonParts(r, pts, chunks) {
   return parts;
 }
 
+/* One flat table, which is what a spreadsheet or pandas actually wants. GPS columns
+   are written only on the rows where a new fix arrived; fill them downwards on load.
+   Ride metadata rides along as # comment lines, which pandas skips with comment="#". */
+function metaLines(r, jumps) {
+  var L = [
+    "# bumplog " + VERSION,
+    "# ride," + r.id,
+    "# started," + new Date(r.startedAt).toISOString(),
+    "# duration_s," + ((r.dur || 0) / 1000).toFixed(1),
+    "# distance_m," + (r.dist || 0),
+    "# descended_m," + (r.drop || 0),
+    "# top_speed_kmh," + (r.maxSpd || 0),
+    "# roughness_rms_g," + (r.rms || 0),
+    "# peak_g," + (r.peak || 0),
+    "# sample_rate_hz," + (r.hz || 0),
+    "# vertical_rms_g," + (r.vRms === null || r.vRms === undefined ? "" : r.vRms),
+    "# lateral_rms_g," + (r.lRms === null || r.lRms === undefined ? "" : r.lRms),
+    "# max_rotation_degs," + (r.maxTurn || ""),
+    "# gps_restarts," + (r.gpsDrops || 0),
+    "# jumps," + ((jumps && jumps.length) || 0),
+    "# airtime_s," + (((r.airMs || 0) / 1000).toFixed(2))
+  ];
+  if (jumps) {
+    for (var j = 0; j < jumps.length; j++) {
+      L.push("# jump," + jumps[j].t + "," + jumps[j].dur + "," + jumps[j].peak + "," +
+             airHeight(jumps[j].dur).toFixed(2));
+    }
+    if (jumps.length) L.push("# jump_columns,start_ms,duration_ms,landing_g,hang_height_m");
+  }
+  return L.join("\n") + "\n";
+}
+
+function inAirAt(jumps, t) {
+  if (!jumps) return 0;
+  for (var j = 0; j < jumps.length; j++) {
+    if (t >= jumps[j].t && t <= jumps[j].t + jumps[j].dur) return 1;
+  }
+  return 0;
+}
+
+var CSV_ALL = ACCEL_COLS.concat(
+  ["lat", "lon", "alt_m", "gps_acc_m", "speed_ms", "heading_deg", "in_air"]);
+
+function combinedCsvParts(r, pts, chunks, jumps) {
+  var parts = [metaLines(r, jumps), CSV_ALL.join(",") + "\n"];
+  var buf = [], i, g = 0;
+  var sorted = (pts || []).slice().sort(function (a, b) { return a.t - b.t; });
+  for (var c = 0; c < chunks.length; c++) {
+    var ch = chunks[c];
+    for (i = 0; i < ch.t.length; i++) {
+      var t = ch.t[i], gpsCols = ",,,,,";
+      if (g < sorted.length && sorted[g].t <= t) {
+        var p = sorted[g++];
+        gpsCols = p.lat.toFixed(7) + "," + p.lon.toFixed(7) + "," +
+          (p.alt === null || p.alt === undefined ? "" : p.alt.toFixed(2)) + "," +
+          (p.acc === null || p.acc === undefined ? "" : p.acc.toFixed(1)) + "," +
+          (p.spd === null || p.spd === undefined ? "" : p.spd.toFixed(2)) + "," +
+          (p.hdg === null || p.hdg === undefined ? "" : p.hdg.toFixed(1));
+      }
+      buf.push(t + "," +
+        fx(ch.x, i) + "," + fx(ch.y, i) + "," + fx(ch.z, i) + "," +
+        fx(ch.lx, i) + "," + fx(ch.ly, i) + "," + fx(ch.lz, i) + "," +
+        fx(ch.ra, i) + "," + fx(ch.rb, i) + "," + fx(ch.rg, i) + "," +
+        gpsCols + "," + inAirAt(jumps, t));
+      if (buf.length >= 2000) { parts.push(buf.join("\n") + "\n"); buf = []; }
+    }
+  }
+  if (buf.length) parts.push(buf.join("\n") + "\n");
+  return parts;
+}
+
+/* One row per second. A ten minute ride is a few hundred rows, small enough to open
+   anywhere and to paste into a message if the share sheet keeps refusing. */
+function secondCsvParts(r, pts, rough, jumps) {
+  var head = ["t_s", "roughness_g", "lat", "lon", "alt_m", "speed_kmh", "in_air"];
+  var parts = [metaLines(r, jumps), head.join(",") + "\n"];
+  var secs = Math.max(rough ? rough.length : 0, Math.ceil((r.dur || 0) / 1000));
+  var sorted = (pts || []).slice().sort(function (a, b) { return a.t - b.t; });
+  var rows = [], g = 0, last = null;
+  for (var sec = 0; sec < secs; sec++) {
+    var t = sec * 1000;
+    while (g < sorted.length && sorted[g].t <= t + 500) { last = sorted[g++]; }
+    rows.push(sec + "," +
+      (rough && rough[sec] !== undefined ? (Math.round(rough[sec] * 1000) / 1000) : "") + "," +
+      (last ? last.lat.toFixed(7) : "") + "," +
+      (last ? last.lon.toFixed(7) : "") + "," +
+      (last && last.alt !== null && last.alt !== undefined ? last.alt.toFixed(1) : "") + "," +
+      (last && last.spd !== null && last.spd !== undefined && last.spd >= 0
+        ? (last.spd * 3.6).toFixed(1) : "") + "," +
+      inAirAt(jumps, t));
+  }
+  parts.push(rows.join("\n") + "\n");
+  return parts;
+}
+
 /* Everything except the raw stream, plus 1.5 s of raw either side of each jump so
    the air detection can still be checked. Small enough to move around easily. */
 function summaryParts(r, pts, chunks, jumps, rough) {
@@ -1782,6 +1877,16 @@ Array.prototype.slice.call(document.querySelectorAll(".act[data-x]")).forEach(fu
       deliver(base + ".gpx", [gpxDoc(openR, openPts)], "application/gpx+xml"); return;
     }
     if (!openChunks) { toast("Still reading the samples, give it a second"); return; }
+    if (kind === "csvsec") {
+      deliver(base + "-seconds.csv",
+              secondCsvParts(openR, openPts || [], openRough, openJumps), "text/csv");
+      return;
+    }
+    if (kind === "csvall") {
+      deliver(base + "-all.csv",
+              combinedCsvParts(openR, openPts || [], openChunks, openJumps), "text/csv");
+      return;
+    }
     if (kind === "summary") {
       deliver(base + "-summary.json",
               summaryParts(openR, openPts || [], openChunks, openJumps, openRough),

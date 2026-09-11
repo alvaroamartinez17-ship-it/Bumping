@@ -115,7 +115,14 @@ files clears the stored copy and fetches everything again. Neither touches your 
 
 ## Reading the exports
 
-`*-accel.csv` — ten columns, roughly 60 rows per second, about 1 MB per five minutes:
+Two CSVs, both one flat table, both carrying the ride's metadata as `#` comment lines at
+the top. Load with `pandas.read_csv(path, comment="#")`.
+
+`*-seconds.csv` — **the one to send.** One row per second: `t_s, roughness_g, lat, lon,
+alt_m, speed_kmh, in_air`. A ten minute ride is 600 rows, about 27 KB. Small enough to
+open anywhere, mail to yourself, or paste into a message.
+
+`*-all.csv` — everything, one row per accelerometer sample, about 2.8 MB for ten minutes:
 
 | column | meaning |
 | --- | --- |
@@ -123,36 +130,19 @@ files clears the stored copy and fetches everything again. Neither touches your 
 | `ax, ay, az` | acceleration in m/s squared, **gravity included**, phone frame |
 | `lin_x, lin_y, lin_z` | the same reading with gravity removed by iOS |
 | `rot_alpha, rot_beta, rot_gamma` | gyroscope, degrees per second |
+| `lat, lon, alt_m, gps_acc_m, speed_ms, heading_deg` | written only on rows where a new fix arrived |
+| `in_air` | 1 while a detected jump is in progress |
 
-Blank cells mean iOS gave no value for that sample. Subtracting `lin_*` from `a*` gives the
-gravity vector, which is how the app works out which way is down inside the mount. That in
-turn splits each hit into a vertical part (roots, rocks, drops) and a lateral part (berm
-load, tyre squirm), reported on the ride as vertical and lateral roughness.
+The GPS columns are blank on most rows because fixes arrive about once a second while the
+accelerometer runs at sixty. Fill them downwards after loading: `df[gps_cols].ffill()`.
 
-`*-gps.csv` — `t_ms,epoch_ms,lat,lon,alt_m,acc_m,speed_ms,heading_deg`. Blank where iOS gave
-no value. Roughly 1 row per second.
+The `#` header carries duration, distance, descent, top speed, roughness, the vertical and
+lateral split, GPS restarts, and one `# jump,` line per jump with its start, duration,
+landing force and hang height.
 
 `*.gpx` — the track, for anything that reads GPX.
 
-`*.json` — everything in one file: `ride` (the summary, including `jumps` and `rough`),
-`gps` (array of fix objects), `accel` (array of rows matching `accelColumns`, with `null`
-where iOS gave no value) and a `units` block. This is the one to send if you want the data
-analysed somewhere else.
-
-`*-summary.json` — the same thing without the raw 60 Hz stream, but keeping per-second
-roughness and 1.5 seconds of raw samples either side of every detected jump. A ten minute
-ride is about 110 KB instead of 2 MB. This is the one to send.
-
-### Getting the file off the phone
-
-Tap an export and iOS should open the share sheet. Scroll the row of icons and choose
-**Save to Files**, then On My iPhone. That leaves a real file you can attach later.
-
-If the share sheet does not appear, a rescue screen opens saying what was refused, and
-offers three routes: Save to Files again, a plain download link, and copy the whole file to
-the clipboard. The download link only works when the app is open in Safari, because an app
-launched from the home screen has no download manager. That is an iOS limitation, not a bug
-in the app.
+`*-summary.json` and `*.json` — the same data as JSON, if you prefer it.
 
 The roughness number is the RMS of |acceleration| after a slow high-pass, in g. Taking the
 magnitude makes it independent of how the phone is mounted, so two runs compare even if you
