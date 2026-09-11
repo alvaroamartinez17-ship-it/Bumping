@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Bumplog</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="theme-color" content="#15120E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Bumplog">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<style>
+:root{
+  --ink:#15120E;
+  --panel:#1F1A15;
+  --panel2:#2A241D;
+  --rule:#382F27;
+  --cream:#F0E7D7;
+  --dust:#998C79;
+  --orange:#F4671F;
+  --green:#7BC28C;
+  --red:#DC4A3D;
+  --pad:16px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+  margin:0;
+  background:var(--ink);
+  color:var(--cream);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  font-size:16px;
+  line-height:1.45;
+  overscroll-behavior:none;
+  -webkit-user-select:none;user-select:none;
+}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;letter-spacing:-0.01em}
+
+/* ---------- shell ---------- */
+#app{
+  display:flex;flex-direction:column;
+  height:100vh;height:-webkit-fill-available;
+  padding-top:env(safe-area-inset-top);
+}
+.screen{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;display:none;flex-direction:column}
+.screen.on{display:flex}
+
+/* ---------- status strip ---------- */
+.strip{
+  display:flex;align-items:center;gap:14px;
+  padding:10px var(--pad);
+  border-bottom:1px solid var(--rule);
+  font-size:13px;color:var(--dust);
+  flex:0 0 auto;
+}
+.sensor{display:flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--rule);flex:0 0 auto}
+.dot.live{background:var(--green)}
+.dot.warn{background:var(--orange)}
+.dot.bad{background:var(--red)}
+.strip .right{margin-left:auto;font-variant-numeric:tabular-nums}
+
+/* ---------- record screen ---------- */
+.readout{padding:22px var(--pad) 6px}
+.clock{
+  font-size:60px;line-height:1;font-weight:700;
+  font-variant-numeric:tabular-nums;letter-spacing:-0.03em;
+  margin:0;
+}
+.clock.idle{color:var(--dust)}
+.metrics{display:flex;gap:26px;margin-top:14px}
+.metric .v{font-size:24px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.1}
+.metric .k{font-size:12px;color:var(--dust);margin-top:2px}
+
+/* ---------- trace ---------- */
+.trace{
+  position:relative;margin:18px var(--pad) 0;
+  border:1px solid var(--rule);border-radius:3px;
+  background:var(--panel);
+  height:150px;overflow:hidden;
+}
+.trace canvas{display:block;width:100%;height:100%}
+.trace .peak{
+  position:absolute;right:8px;top:6px;
+  font-size:12px;color:var(--dust);font-variant-numeric:tabular-nums;
+}
+.tracefoot{
+  display:flex;gap:20px;padding:8px var(--pad) 0;
+  font-size:12px;color:var(--dust);font-variant-numeric:tabular-nums;
+}
+.tracefoot b{color:var(--cream);font-weight:600}
+
+.note{
+  margin:14px var(--pad) 0;padding:11px 13px;
+  border-left:2px solid var(--orange);
+  background:var(--panel);
+  font-size:13px;color:var(--dust);line-height:1.5;
+}
+.note.hide{display:none}
+
+/* ---------- record button ---------- */
+.control{
+  flex:0 0 auto;
+  padding:20px var(--pad) calc(14px + env(safe-area-inset-bottom));
+  display:flex;justify-content:center;
+}
+.rec{
+  width:100%;max-width:340px;height:64px;border-radius:4px;
+  background:var(--orange);color:#1A1105;
+  font-size:19px;font-weight:700;letter-spacing:0.01em;
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  transition:transform .08s ease, background .15s ease;
+}
+.rec:active{transform:scale(.985)}
+.rec[disabled]{background:var(--panel2);color:var(--dust)}
+.rec.stop{background:var(--red);color:#FFF2F0}
+.rec .blip{width:11px;height:11px;border-radius:50%;background:currentColor}
+.rec.stop .blip{border-radius:2px;animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.rec.stop .blip{animation:none}}
+
+/* ---------- tabs ---------- */
+.tabs{
+  flex:0 0 auto;display:flex;border-top:1px solid var(--rule);
+  padding-bottom:env(safe-area-inset-bottom);
+}
+.tab{flex:1;padding:13px 0;text-align:center;font-size:14px;color:var(--dust)}
+.tab.on{color:var(--cream);box-shadow:inset 0 2px 0 var(--orange)}
+.tab .badge{color:var(--dust);font-variant-numeric:tabular-nums}
+
+/* ---------- rides ---------- */
+.head{
+  display:flex;align-items:baseline;gap:10px;
+  padding:18px var(--pad) 10px;
+}
+.head h2{margin:0;font-size:22px;font-weight:700;letter-spacing:-0.02em}
+.head .sub{font-size:13px;color:var(--dust);margin-left:auto;font-variant-numeric:tabular-nums}
+.list{list-style:none;margin:0;padding:0 0 24px}
+.ride{
+  display:flex;align-items:center;gap:12px;
+  width:100%;text-align:left;
+  padding:13px var(--pad);
+  border-top:1px solid var(--rule);
+}
+.ride:last-child{border-bottom:1px solid var(--rule)}
+.ride .when{display:block;font-size:15px;font-weight:600}
+.ride .facts{display:block;font-size:12.5px;color:var(--dust);font-variant-numeric:tabular-nums;margin-top:3px}
+.ride .facts i{font-style:normal;color:var(--rule);padding:0 7px}
+.ride canvas{width:66px;height:30px;flex:0 0 auto;margin-left:auto;opacity:.9}
+.empty{padding:40px var(--pad);color:var(--dust);font-size:14px;line-height:1.6}
+.empty b{display:block;color:var(--cream);font-size:16px;margin-bottom:6px;font-weight:600}
+
+/* ---------- detail sheet ---------- */
+.sheet{
+  position:fixed;inset:0;z-index:20;background:var(--ink);
+  display:none;flex-direction:column;
+  padding-top:env(safe-area-inset-top);
+}
+.sheet.on{display:flex}
+.sheetbar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px var(--pad);border-bottom:1px solid var(--rule);flex:0 0 auto;
+}
+.sheetbar .t{font-size:16px;font-weight:600}
+.sheetbar button{font-size:15px;color:var(--orange)}
+.sheetbody{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-bottom:calc(28px + env(safe-area-inset-bottom))}
+.grid{display:flex;flex-wrap:wrap;padding:4px var(--pad) 0}
+.cell{width:50%;padding:14px 0;border-bottom:1px solid var(--rule)}
+.cell .v{font-size:23px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.15}
+.cell .k{font-size:12px;color:var(--dust);margin-top:2px}
+.plot{margin:18px var(--pad) 0;border:1px solid var(--rule);border-radius:3px;background:var(--panel)}
+.plot canvas{display:block;width:100%}
+.plotcap{font-size:12px;color:var(--dust);margin:7px var(--pad) 0}
+.acts{padding:22px var(--pad) 0;display:flex;flex-direction:column;gap:9px}
+.act{
+  padding:14px;border:1px solid var(--rule);border-radius:3px;
+  background:var(--panel);font-size:15px;text-align:left;
+  display:flex;align-items:center;justify-content:space-between;
+}
+.act .hint{font-size:12px;color:var(--dust);font-variant-numeric:tabular-nums}
+.act.danger{color:var(--red);border-color:#4A2A26}
+
+/* ---------- toast ---------- */
+#toast{
+  position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom));
+  transform:translateX(-50%);
+  background:var(--panel2);border:1px solid var(--rule);
+  padding:11px 16px;border-radius:3px;font-size:14px;
+  max-width:86%;text-align:center;z-index:50;
+  opacity:0;pointer-events:none;transition:opacity .18s ease;
+}
+#toast.on{opacity:1}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div class="strip">
+    <span class="sensor"><i class="dot" id="dMotion"></i><span id="tMotion">Motion off</span></span>
+    <span class="sensor"><i class="dot" id="dGps"></i><span id="tGps">GPS off</span></span>
+    <span class="right" id="tStore"></span>
+  </div>
+
+  <!-- ============ RECORD ============ -->
+  <section class="screen on" id="scRec">
+    <div class="readout">
+      <p class="clock idle num" id="clock">0:00</p>
+      <div class="metrics">
+        <div class="metric"><div class="v num" id="mDist">0.00</div><div class="k">km ridden</div></div>
+        <div class="metric"><div class="v num" id="mSpeed">0</div><div class="k">km/h now</div></div>
+        <div class="metric"><div class="v num" id="mDrop">0</div><div class="k">m descended</div></div>
+      </div>
+    </div>
+
+    <div class="trace">
+      <canvas id="cvTrace"></canvas>
+      <div class="peak num" id="tracePeak"></div>
+    </div>
+    <div class="tracefoot">
+      <span><b id="fRms">0.00</b> g rms</span>
+      <span><b id="fHz">0</b> Hz</span>
+      <span><b id="fSamp">0</b> samples</span>
+      <span><b id="fFix">0</b> fixes</span>
+    </div>
+
+    <div class="note" id="note"></div>
+
+    <div style="flex:1"></div>
+
+    <div class="control">
+      <button class="rec" id="btnRec"><i class="blip"></i><span id="recLabel">Start recording</span></button>
+    </div>
+  </section>
+
+  <!-- ============ RIDES ============ -->
+  <section class="screen" id="scRides">
+    <div class="head">
+      <h2>Rides</h2>
+      <span class="sub" id="ridesSub"></span>
+    </div>
+    <ul class="list" id="rideList"></ul>
+  </section>
+
+  <nav class="tabs">
+    <button class="tab on" data-go="scRec">Record</button>
+    <button class="tab" data-go="scRides">Rides <span class="badge" id="tabCount"></span></button>
+  </nav>
+</div>
+
+<!-- ============ DETAIL ============ -->
+<div class="sheet" id="sheet">
+  <div class="sheetbar">
+    <button id="sheetBack">Back</button>
+    <span class="t" id="sheetTitle"></span>
+    <button id="sheetDel" style="color:var(--red)">Delete</button>
+  </div>
+  <div class="sheetbody">
+    <div class="grid" id="sheetGrid"></div>
+    <div class="plot"><canvas id="cvRough"></canvas></div>
+    <p class="plotcap">Roughness second by second. Taller means a harsher second.</p>
+    <div class="plot"><canvas id="cvTrack"></canvas></div>
+    <p class="plotcap" id="trackCap">Track shape from the GPS fixes.</p>
+    <div class="acts">
+      <button class="act" data-x="accel">Export accelerometer CSV<span class="hint" id="hAccel"></span></button>
+      <button class="act" data-x="gps">Export GPS CSV<span class="hint" id="hGps"></span></button>
+      <button class="act" data-x="gpx">Export GPX track<span class="hint">for maps</span></button>
+      <button class="act" data-x="json">Export everything as JSON<span class="hint">raw</span></button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+/* =======================================================================
+   Bumplog — accelerometer + GPS logger for mountain bike descents
+   Everything stays on this phone. No network calls after the first load.
+   ======================================================================= */
+
+var G = 9.80665;
+var $ = function (id) { return document.getElementById(id); };
+
+/* ---------------------------------------------------------------- store */
+var DB = null;
+function openDB() {
+  return new Promise(function (res, rej) {
+    var r = indexedDB.open("bumplog", 1);
+    r.onupgradeneeded = function (e) {
+      var db = e.target.result;
+      if (!db.objectStoreNames.contains("rides")) {
+        db.createObjectStore("rides", { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains("accel")) {
+        db.createObjectStore("accel", { keyPath: "k" }).createIndex("ride", "ride");
+      }
+      if (!db.objectStoreNames.contains("gps")) {
+        db.createObjectStore("gps", { keyPath: "k" }).createIndex("ride", "ride");
+      }
+    };
+    r.onsuccess = function () { DB = r.result; res(DB); };
+    r.onerror = function () { rej(r.error); };
+  });
+}
+function tx(names, mode) { return DB.transaction(names, mode); }
+function wrap(req) {
+  return new Promise(function (res, rej) {
+    req.onsuccess = function () { res(req.result); };
+    req.onerror = function () { rej(req.error); };
+  });
+}
+function put(store, val) { return wrap(tx([store], "readwrite").objectStore(store).put(val)); }
+function getAll(store) { return wrap(tx([store], "readonly").objectStore(store).getAll()); }
+function byRide(store, id) {
+  return wrap(tx([store], "readonly").objectStore(store).index("ride").getAll(IDBKeyRange.only(id)));
+}
+function delRide(id) {
+  return new Promise(function (res, rej) {
+    var t = tx(["rides", "accel", "gps"], "readwrite");
+    t.objectStore("rides").delete(id);
+    ["accel", "gps"].forEach(function (s) {
+      var cur = t.objectStore(s).index("ride").openKeyCursor(IDBKeyRange.only(id));
+      cur.onsuccess = function (e) {
+        var c = e.target.result;
+        if (c) { t.objectStore(s).delete(c.primaryKey); c.continue(); }
+      };
+    });
+    t.oncomplete = res; t.onerror = function () { rej(t.error); };
+  });
+}
+
+/* ------------------------------------------------------------- helpers */
+function pad2(n) { return n < 10 ? "0" + n : "" + n; }
+function hms(ms) {
+  var s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  s = s % 60;
+  return h ? h + ":" + pad2(m) + ":" + pad2(s) : m + ":" + pad2(s);
+}
+function haversine(a, b) {
+  var R = 6371000, t = Math.PI / 180;
+  var dLat = (b.lat - a.lat) * t, dLon = (b.lon - a.lon) * t;
+  var q = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+          Math.cos(a.lat * t) * Math.cos(b.lat * t) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return 2 * R * Math.atan2(Math.sqrt(q), Math.sqrt(1 - q));
+}
+function dateLabel(ts) {
+  var d = new Date(ts);
+  var days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  var mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return days[d.getDay()] + " " + d.getDate() + " " + mon[d.getMonth()] +
+         ", " + d.getHours() + ":" + pad2(d.getMinutes());
+}
+var toastTimer = null;
+function toast(msg) {
+  var t = $("toast");
+  t.textContent = msg; t.classList.add("on");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.classList.remove("on"); }, 2600);
+}
+function setDot(el, cls, text, label) {
+  el.className = "dot" + (cls ? " " + cls : "");
+  if (label) label.textContent = text;
+}
+
+/* ------------------------------------------------------------ recorder */
+var R = {
+  on: false,
+  id: null, t0: 0, perf0: 0,
+  aT: [], aX: [], aY: [], aZ: [],       // accel buffer (t in ms since start)
+  gBuf: [],                             // gps buffer
+  aSeq: 0, gSeq: 0,
+  nA: 0, nG: 0,
+  lastFix: null,
+  dist: 0, drop: 0, maxSpd: 0, spd: 0,
+  lastAlt: null,
+  ema: 1,                               // smoothed |a| in g, for the high-pass
+  sumSq: 0, nSq: 0, peak: 0,
+  secBucketSq: 0, secBucketN: 0, secIdx: 0, rough: [],
+  ring: new Float32Array(220), ringI: 0,
+  hzCount: 0, hz: 0, hzT: 0,
+  gaps: 0,
+  flushT: 0
+};
+
+function resetRecorder() {
+  R.aT = []; R.aX = []; R.aY = []; R.aZ = []; R.gBuf = [];
+  R.aSeq = 0; R.gSeq = 0; R.nA = 0; R.nG = 0;
+  R.lastFix = null; R.dist = 0; R.drop = 0; R.maxSpd = 0; R.spd = 0; R.lastAlt = null;
+  R.ema = 1; R.sumSq = 0; R.nSq = 0; R.peak = 0;
+  R.secBucketSq = 0; R.secBucketN = 0; R.secIdx = 0; R.rough = [];
+  R.ring = new Float32Array(220); R.ringI = 0;
+  R.hzCount = 0; R.hz = 0; R.gaps = 0;
+}
+
+function onMotion(e) {
+  var a = e.accelerationIncludingGravity;
+  if (!a || a.x === null) return;
+  var t = performance.now() - R.perf0;
+  var x = a.x, y = a.y, z = a.z;
+
+  if (R.on) {
+    R.aT.push(Math.round(t)); R.aX.push(x); R.aY.push(y); R.aZ.push(z);
+    R.nA++;
+  }
+  R.hzCount++;
+
+  // orientation-free roughness: magnitude, high-passed by a slow EMA
+  var mag = Math.sqrt(x * x + y * y + z * z) / G;
+  R.ema += (mag - R.ema) * 0.05;
+  var hp = mag - R.ema;
+
+  R.ring[R.ringI] = hp;
+  R.ringI = (R.ringI + 1) % R.ring.length;
+
+  if (R.on) {
+    R.sumSq += hp * hp; R.nSq++;
+    var ab = Math.abs(hp); if (ab > R.peak) R.peak = ab;
+    R.secBucketSq += hp * hp; R.secBucketN++;
+    var sec = Math.floor(t / 1000);
+    while (R.secIdx < sec) {
+      R.rough.push(R.secBucketN ? Math.round(Math.sqrt(R.secBucketSq / R.secBucketN) * 1000) / 1000 : 0);
+      R.secBucketSq = 0; R.secBucketN = 0; R.secIdx++;
+    }
+    if (R.aT.length >= 300 || t - R.flushT > 3000) flushAccel();
+  }
+}
+
+function onFix(pos) {
+  var c = pos.coords;
+  setDot($("dGps"), c.accuracy <= 15 ? "live" : "warn",
+    "GPS " + Math.round(c.accuracy) + " m", $("tGps"));
+
+  var p = {
+    t: R.on ? Math.round(performance.now() - R.perf0) : 0,
+    epoch: pos.timestamp,
+    lat: c.latitude, lon: c.longitude,
+    alt: c.altitude === null ? null : c.altitude,
+    acc: c.accuracy,
+    altAcc: c.altitudeAccuracy === null ? null : c.altitudeAccuracy,
+    spd: c.speed === null ? null : c.speed,
+    hdg: c.heading === null ? null : c.heading
+  };
+  R.spd = p.spd !== null && p.spd >= 0 ? p.spd * 3.6 : R.spd;
+  if (R.spd > R.maxSpd) R.maxSpd = R.spd;
+
+  if (!R.on) { R.lastFix = p; return; }
+
+  R.gBuf.push(p); R.nG++;
+  if (R.lastFix && c.accuracy <= 30) {
+    var d = haversine(R.lastFix, p);
+    if (d > 0.7 && d < 120) R.dist += d;
+  }
+  if (p.alt !== null) {
+    if (R.lastAlt === null) R.lastAlt = p.alt;
+    else {
+      var dh = p.alt - R.lastAlt;
+      if (dh < -1.5) { R.drop += -dh; R.lastAlt = p.alt; }
+      else if (dh > 1.5) { R.lastAlt = p.alt; }
+    }
+  }
+  R.lastFix = p;
+  if (R.gBuf.length >= 20) flushGps();
+}
+
+function flushAccel() {
+  if (!R.aT.length) return;
+  var rec = { k: R.id + ":" + pad6(R.aSeq++), ride: R.id, t: R.aT, x: R.aX, y: R.aY, z: R.aZ };
+  R.aT = []; R.aX = []; R.aY = []; R.aZ = [];
+  R.flushT = performance.now() - R.perf0;
+  put("accel", rec).catch(function () { toast("Storage write failed"); });
+}
+function flushGps() {
+  if (!R.gBuf.length) return;
+  var rec = { k: R.id + ":" + pad6(R.gSeq++), ride: R.id, p: R.gBuf };
+  R.gBuf = [];
+  put("gps", rec).catch(function () {});
+}
+function pad6(n) { return ("00000" + n).slice(-6); }
+
+/* ------------------------------------------------------- sensor access */
+var motionReady = false, gpsWatch = null;
+
+function askMotion() {
+  var DM = window.DeviceMotionEvent;
+  if (!DM) { setDot($("dMotion"), "bad", "No motion sensor", $("tMotion")); return Promise.resolve(false); }
+  if (typeof DM.requestPermission === "function") {
+    return DM.requestPermission().then(function (s) {
+      if (s === "granted") { attachMotion(); return true; }
+      setDot($("dMotion"), "bad", "Motion blocked", $("tMotion"));
+      return false;
+    }).catch(function () {
+      setDot($("dMotion"), "bad", "Motion blocked", $("tMotion"));
+      return false;
+    });
+  }
+  attachMotion();
+  return Promise.resolve(true);
+}
+function attachMotion() {
+  if (motionReady) return;
+  window.addEventListener("devicemotion", onMotion, false);
+  motionReady = true;
+  setDot($("dMotion"), "live", "Motion live", $("tMotion"));
+}
+function startGps() {
+  if (gpsWatch !== null || !navigator.geolocation) return;
+  setDot($("dGps"), "warn", "GPS searching", $("tGps"));
+  gpsWatch = navigator.geolocation.watchPosition(onFix, function (err) {
+    setDot($("dGps"), "bad", err.code === 1 ? "GPS blocked" : "GPS lost", $("tGps"));
+  }, { enableHighAccuracy: true, maximumAge: 0, timeout: 25000 });
+}
+
+/* -------------------------------------------------------- start / stop */
+function start() {
+  askMotion().then(function (ok) {
+    if (!ok) { toast("Allow motion access in Settings, Safari, Motion & Orientation Access"); return; }
+    startGps();
+    resetRecorder();
+    R.id = "r" + Date.now();
+    R.t0 = Date.now();
+    R.perf0 = performance.now();
+    R.flushT = 0;
+    R.on = true;
+    $("btnRec").classList.add("stop");
+    $("recLabel").textContent = "Stop recording";
+    $("clock").classList.remove("idle");
+    $("note").classList.add("hide");
+    put("rides", { id: R.id, startedAt: R.t0, endedAt: null, open: true, rough: [] });
+  });
+}
+
+function stop() {
+  R.on = false;
+  flushAccel(); flushGps();
+  if (R.secBucketN) R.rough.push(Math.round(Math.sqrt(R.secBucketSq / R.secBucketN) * 1000) / 1000);
+  var ride = {
+    id: R.id,
+    startedAt: R.t0,
+    endedAt: Date.now(),
+    open: false,
+    dur: Date.now() - R.t0,
+    nAccel: R.nA,
+    nGps: R.nG,
+    dist: Math.round(R.dist),
+    drop: Math.round(R.drop),
+    maxSpd: Math.round(R.maxSpd * 10) / 10,
+    rms: R.nSq ? Math.round(Math.sqrt(R.sumSq / R.nSq) * 1000) / 1000 : 0,
+    peak: Math.round(R.peak * 100) / 100,
+    hz: R.nA && R.t0 ? Math.round(R.nA / ((Date.now() - R.t0) / 1000)) : 0,
+    gaps: R.gaps,
+    rough: R.rough
+  };
+  put("rides", ride).then(function () {
+    $("btnRec").classList.remove("stop");
+    $("recLabel").textContent = "Start recording";
+    $("clock").classList.add("idle");
+    toast("Saved " + hms(ride.dur) + " with " + ride.nAccel.toLocaleString() + " samples");
+    renderRides();
+    go("scRides");
+  });
+}
+
+/* ----------------------------------------------------------- live loop */
+var lastPaint = 0;
+function loop(ts) {
+  requestAnimationFrame(loop);
+
+  if (ts - R.hzT > 1000) { R.hz = R.hzCount; R.hzCount = 0; R.hzT = ts; }
+  if (ts - lastPaint < 100) { drawTrace(); return; }
+  lastPaint = ts;
+
+  if (R.on) $("clock").textContent = hms(Date.now() - R.t0);
+  $("mDist").textContent = (R.dist / 1000).toFixed(2);
+  $("mSpeed").textContent = Math.round(R.spd);
+  $("mDrop").textContent = Math.round(R.drop);
+  $("fRms").textContent = (R.nSq ? Math.sqrt(R.sumSq / R.nSq) : 0).toFixed(2);
+  $("fHz").textContent = R.hz;
+  $("fSamp").textContent = R.nA.toLocaleString();
+  $("fFix").textContent = R.nG;
+  $("tracePeak").textContent = R.peak ? "peak " + R.peak.toFixed(2) + " g" : "";
+  drawTrace();
+}
+
+/* ------------------------------------------------------------- drawing */
+function fitCanvas(cv, cssH) {
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var w = cv.clientWidth || cv.parentNode.clientWidth;
+  var h = cssH || cv.clientHeight || cv.parentNode.clientHeight;
+  if (cv._w !== w || cv._h !== h) {
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    cv.style.height = h + "px";
+    cv._w = w; cv._h = h; cv._dpr = dpr;
+  }
+  var c = cv.getContext("2d");
+  c.setTransform(cv._dpr, 0, 0, cv._dpr, 0, 0);
+  return { c: c, w: w, h: h };
+}
+
+function drawTrace() {
+  var f = fitCanvas($("cvTrace"));
+  var c = f.c, w = f.w, h = f.h, mid = h / 2;
+  c.clearRect(0, 0, w, h);
+
+  c.strokeStyle = "#2E2720"; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(0, mid + .5); c.lineTo(w, mid + .5); c.stroke();
+
+  var n = R.ring.length, step = w / n, scale = mid / 1.6;
+  c.strokeStyle = motionReady ? "#F4671F" : "#3A3129";
+  c.lineWidth = 1.5;
+  c.beginPath();
+  for (var i = 0; i < n; i++) {
+    var v = R.ring[(R.ringI + i) % n];
+    var y = mid - Math.max(-1.55, Math.min(1.55, v)) * scale;
+    var x = i * step;
+    if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+  }
+  c.stroke();
+
+  if (!motionReady) {
+    c.fillStyle = "#998C79"; c.font = "13px -apple-system,sans-serif";
+    c.textAlign = "center";
+    c.fillText("Tap start to wake the sensor", w / 2, mid - 10);
+    c.textAlign = "left";
+  }
+}
+
+function drawSpark(cv, rough) {
+  var f = fitCanvas(cv, 30), c = f.c, w = f.w, h = f.h;
+  c.clearRect(0, 0, w, h);
+  if (!rough || !rough.length) return;
+  var max = 0, i;
+  for (i = 0; i < rough.length; i++) if (rough[i] > max) max = rough[i];
+  if (max <= 0) max = 1;
+  c.fillStyle = "#F4671F";
+  var bw = Math.max(1, w / rough.length);
+  for (i = 0; i < rough.length; i++) {
+    var x = (i / rough.length) * w;
+    var bh = Math.max(1, (rough[i] / max) * (h - 2));
+    c.fillRect(x, h - bh, bw * 0.85, bh);
+  }
+}
+
+function drawRough(rough) {
+  var cv = $("cvRough");
+  var f = fitCanvas(cv, 120), c = f.c, w = f.w, h = f.h;
+  c.clearRect(0, 0, w, h);
+  if (!rough || !rough.length) return;
+  var max = 0, i;
+  for (i = 0; i < rough.length; i++) if (rough[i] > max) max = rough[i];
+  if (max <= 0) max = 1;
+  var pad = 10, gh = h - pad * 2;
+  c.fillStyle = "#F4671F";
+  var bw = w / rough.length;
+  for (i = 0; i < rough.length; i++) {
+    var bh = Math.max(1, (rough[i] / max) * gh);
+    c.fillRect(i * bw, h - pad - bh, Math.max(1, bw * 0.8), bh);
+  }
+  c.strokeStyle = "#382F27"; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(0, h - pad + .5); c.lineTo(w, h - pad + .5); c.stroke();
+  c.fillStyle = "#998C79"; c.font = "11px -apple-system,sans-serif";
+  c.fillText(max.toFixed(2) + " g", 4, 12);
+}
+
+function drawTrack(pts) {
+  var cv = $("cvTrack");
+  var f = fitCanvas(cv, 170), c = f.c, w = f.w, h = f.h;
+  c.clearRect(0, 0, w, h);
+  if (!pts || pts.length < 2) {
+    c.fillStyle = "#998C79"; c.font = "13px -apple-system,sans-serif";
+    c.textAlign = "center"; c.fillText("No GPS fixes in this ride", w / 2, h / 2);
+    c.textAlign = "left"; return;
+  }
+  var minLat = 90, maxLat = -90, minLon = 180, maxLon = -180, i;
+  for (i = 0; i < pts.length; i++) {
+    if (pts[i].lat < minLat) minLat = pts[i].lat;
+    if (pts[i].lat > maxLat) maxLat = pts[i].lat;
+    if (pts[i].lon < minLon) minLon = pts[i].lon;
+    if (pts[i].lon > maxLon) maxLon = pts[i].lon;
+  }
+  var latMid = (minLat + maxLat) / 2;
+  var kx = Math.cos(latMid * Math.PI / 180);
+  var dLat = Math.max(maxLat - minLat, 1e-6);
+  var dLon = Math.max((maxLon - minLon) * kx, 1e-6);
+  var pad = 18;
+  var s = Math.min((w - pad * 2) / dLon, (h - pad * 2) / dLat);
+  var ox = (w - dLon * s) / 2, oy = (h - dLat * s) / 2;
+  function px(p) { return ox + (p.lon - minLon) * kx * s; }
+  function py(p) { return h - (oy + (p.lat - minLat) * s); }
+
+  c.strokeStyle = "#F4671F"; c.lineWidth = 2.5;
+  c.lineJoin = "round"; c.lineCap = "round";
+  c.beginPath();
+  for (i = 0; i < pts.length; i++) {
+    if (i === 0) c.moveTo(px(pts[i]), py(pts[i])); else c.lineTo(px(pts[i]), py(pts[i]));
+  }
+  c.stroke();
+  c.fillStyle = "#7BC28C";
+  c.beginPath(); c.arc(px(pts[0]), py(pts[0]), 4.5, 0, 6.2832); c.fill();
+  c.fillStyle = "#F0E7D7";
+  c.beginPath(); c.arc(px(pts[pts.length - 1]), py(pts[pts.length - 1]), 4.5, 0, 6.2832); c.fill();
+}
+
+/* ----------------------------------------------------------- rides list */
+var rides = [];
+function renderRides() {
+  return getAll("rides").then(function (rows) {
+    rides = rows.filter(function (r) { return !r.open; })
+                .sort(function (a, b) { return b.startedAt - a.startedAt; });
+    var ul = $("rideList");
+    ul.innerHTML = "";
+    $("tabCount").textContent = rides.length ? rides.length : "";
+    if (!rides.length) {
+      ul.innerHTML = '<li class="empty"><b>Nothing recorded yet</b>' +
+        'Mount the phone, hit start at the top of the trail, hit stop at the bottom. ' +
+        'Each run lands here with its raw samples ready to export.</li>';
+      $("ridesSub").textContent = "";
+      return;
+    }
+    var totS = 0, totD = 0;
+    rides.forEach(function (r) {
+      totS += r.nAccel || 0; totD += r.dist || 0;
+      var li = document.createElement("li");
+      var b = document.createElement("button");
+      b.className = "ride";
+      b.innerHTML =
+        '<span><span class="when"></span><span class="facts"></span></span>' +
+        '<canvas></canvas>';
+      b.querySelector(".when").textContent = dateLabel(r.startedAt);
+      b.querySelector(".facts").innerHTML =
+        hms(r.dur || 0) + "<i>|</i>" + ((r.dist || 0) / 1000).toFixed(2) + " km<i>|</i>" +
+        (r.rms || 0).toFixed(2) + " g rms";
+      b.onclick = function () { openRide(r); };
+      li.appendChild(b);
+      ul.appendChild(li);
+      drawSpark(b.querySelector("canvas"), r.rough);
+    });
+    $("ridesSub").textContent = (totD / 1000).toFixed(1) + " km, " +
+      (totS / 1000).toFixed(0) + "k samples";
+  });
+}
+
+/* ------------------------------------------------------------- detail */
+var openR = null, openPts = null;
+function openRide(r) {
+  openR = r;
+  $("sheetTitle").textContent = dateLabel(r.startedAt);
+  var cells = [
+    [hms(r.dur || 0), "duration"],
+    [((r.dist || 0) / 1000).toFixed(2) + " km", "distance"],
+    [(r.drop || 0) + " m", "descended"],
+    [(r.maxSpd || 0).toFixed(1) + " km/h", "top speed"],
+    [(r.rms || 0).toFixed(3) + " g", "average roughness"],
+    [(r.peak || 0).toFixed(2) + " g", "hardest single hit"],
+    [(r.nAccel || 0).toLocaleString(), "accel samples"],
+    [(r.hz || 0) + " Hz", "sample rate"]
+  ];
+  $("sheetGrid").innerHTML = cells.map(function (c) {
+    return '<div class="cell"><div class="v num">' + c[0] + '</div><div class="k">' + c[1] + '</div></div>';
+  }).join("");
+  $("hAccel").textContent = (r.nAccel || 0).toLocaleString() + " rows";
+  $("hGps").textContent = (r.nGps || 0) + " fixes";
+  $("sheet").classList.add("on");
+  drawRough(r.rough);
+  byRide("gps", r.id).then(function (chunks) {
+    chunks.sort(function (a, b) { return a.k < b.k ? -1 : 1; });
+    openPts = [];
+    chunks.forEach(function (ch) { openPts = openPts.concat(ch.p); });
+    drawTrack(openPts);
+    $("trackCap").textContent = openPts.length
+      ? "Track shape from " + openPts.length + " GPS fixes. Green is the start."
+      : "No GPS fixes were stored for this ride.";
+  });
+}
+$("sheetBack").onclick = function () { $("sheet").classList.remove("on"); openR = null; };
+$("sheetDel").onclick = function () {
+  if (!openR) return;
+  if (!confirm("Delete this ride and all its samples? This cannot be undone.")) return;
+  delRide(openR.id).then(function () {
+    $("sheet").classList.remove("on");
+    openR = null;
+    renderRides();
+    toast("Ride deleted");
+    updateStorage();
+  });
+};
+
+/* ------------------------------------------------------------- export */
+function accelRows(id) {
+  return byRide("accel", id).then(function (chunks) {
+    chunks.sort(function (a, b) { return a.k < b.k ? -1 : 1; });
+    var out = ["t_ms,ax,ay,az"];
+    chunks.forEach(function (ch) {
+      for (var i = 0; i < ch.t.length; i++) {
+        out.push(ch.t[i] + "," + ch.x[i].toFixed(4) + "," + ch.y[i].toFixed(4) + "," + ch.z[i].toFixed(4));
+      }
+    });
+    return out.join("\n");
+  });
+}
+function gpsRows(pts) {
+  var out = ["t_ms,epoch_ms,lat,lon,alt_m,acc_m,speed_ms,heading_deg"];
+  pts.forEach(function (p) {
+    out.push([p.t, p.epoch, p.lat.toFixed(7), p.lon.toFixed(7),
+      p.alt === null ? "" : p.alt.toFixed(2),
+      p.acc === null ? "" : p.acc.toFixed(1),
+      p.spd === null ? "" : p.spd.toFixed(2),
+      p.hdg === null ? "" : p.hdg.toFixed(1)].join(","));
+  });
+  return out.join("\n");
+}
+function gpxDoc(r, pts) {
+  var body = pts.map(function (p) {
+    return '  <trkpt lat="' + p.lat.toFixed(7) + '" lon="' + p.lon.toFixed(7) + '">' +
+      (p.alt === null ? "" : "<ele>" + p.alt.toFixed(1) + "</ele>") +
+      "<time>" + new Date(p.epoch).toISOString() + "</time></trkpt>";
+  }).join("\n");
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<gpx version="1.1" creator="Bumplog" xmlns="http://www.topografix.com/GPX/1/1">\n' +
+    "<trk><name>" + dateLabel(r.startedAt) + "</name><trkseg>\n" + body + "\n</trkseg></trk>\n</gpx>";
+}
+function fileBase(r) {
+  var d = new Date(r.startedAt);
+  return "bumplog-" + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) +
+         "-" + pad2(d.getHours()) + pad2(d.getMinutes());
+}
+function deliver(name, text, mime) {
+  var blob = new Blob([text], { type: mime + ";charset=utf-8" });
+  var file = null;
+  try { file = new File([blob], name, { type: mime }); } catch (e) { file = null; }
+  if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+    navigator.share({ files: [file] }).catch(function () {});
+    return;
+  }
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url; a.download = name; a.rel = "noopener";
+  document.body.appendChild(a); a.click();
+  setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 4000);
+}
+
+Array.prototype.slice.call(document.querySelectorAll(".act[data-x]")).forEach(function (btn) {
+  btn.onclick = function () {
+    if (!openR) return;
+    var kind = btn.getAttribute("data-x"), base = fileBase(openR);
+    toast("Preparing file");
+    if (kind === "gps") { deliver(base + "-gps.csv", gpsRows(openPts || []), "text/csv"); return; }
+    if (kind === "gpx") {
+      if (!openPts || !openPts.length) { toast("No GPS fixes to export"); return; }
+      deliver(base + ".gpx", gpxDoc(openR, openPts), "application/gpx+xml"); return;
+    }
+    accelRows(openR.id).then(function (csv) {
+      if (kind === "accel") { deliver(base + "-accel.csv", csv, "text/csv"); return; }
+      var json = JSON.stringify({
+        ride: openR,
+        gps: openPts || [],
+        accel: csv.split("\n").slice(1).map(function (l) {
+          var v = l.split(",");
+          return [Number(v[0]), Number(v[1]), Number(v[2]), Number(v[3])];
+        }),
+        accelColumns: ["t_ms", "ax", "ay", "az"],
+        units: { accel: "m/s^2, gravity included", t: "ms since ride start" }
+      });
+      deliver(base + ".json", json, "application/json");
+    });
+  };
+});
+
+/* ------------------------------------------------------------ chrome */
+function go(id) {
+  Array.prototype.slice.call(document.querySelectorAll(".screen")).forEach(function (s) {
+    s.classList.toggle("on", s.id === id);
+  });
+  Array.prototype.slice.call(document.querySelectorAll(".tab")).forEach(function (t) {
+    t.classList.toggle("on", t.getAttribute("data-go") === id);
+  });
+}
+Array.prototype.slice.call(document.querySelectorAll(".tab")).forEach(function (t) {
+  t.onclick = function () { go(t.getAttribute("data-go")); };
+});
+$("btnRec").onclick = function () { R.on ? stop() : start(); };
+
+function updateStorage() {
+  if (navigator.storage && navigator.storage.estimate) {
+    navigator.storage.estimate().then(function (e) {
+      if (!e || !e.usage) return;
+      $("tStore").textContent = (e.usage / 1048576).toFixed(1) + " MB stored";
+    }).catch(function () {});
+  }
+}
+
+document.addEventListener("visibilitychange", function () {
+  if (document.hidden && R.on) R.gaps++;
+  else if (!document.hidden && R.on && R.gaps) {
+    toast("Recording paused while the screen was off. Set Auto-Lock to Never.");
+  }
+});
+
+window.addEventListener("error", function (e) {
+  toast("Error: " + (e.message || "unknown"));
+});
+
+/* --------------------------------------------------------------- boot */
+$("note").innerHTML =
+  "Before the first run, set Auto-Lock to Never in Settings, Display &amp; Brightness. " +
+  "iOS stops the sensors the moment the screen sleeps, and this app has no way around that.";
+
+openDB().then(function () {
+  // a reload or crash mid-ride leaves a placeholder behind; clear it and its chunks
+  return getAll("rides").then(function (rows) {
+    var stale = rows.filter(function (r) { return r.open; });
+    return Promise.all(stale.map(function (r) { return delRide(r.id); }));
+  });
+}).then(function () {
+  return renderRides();
+}).then(function () {
+  updateStorage();
+  setInterval(updateStorage, 20000);
+  requestAnimationFrame(loop);
+}).catch(function (err) {
+  toast("Could not open local storage: " + err);
+});
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", function () {
+    navigator.serviceWorker.register("./sw.js").catch(function () {});
+  });
+}
+</script>
+</body>
+</html>
