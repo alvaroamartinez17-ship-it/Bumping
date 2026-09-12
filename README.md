@@ -52,6 +52,19 @@ Tap any row on the Rides tab. Three charts, all drawn from the samples on the ph
 
 No map tiles are fetched, so all of this works with no signal.
 
+## Mounting
+
+How the phone is held changes what the numbers mean. The ride detail shows a **sideways to
+vertical** ratio: a firm handlebar or stem mount puts most of the energy on the vertical
+axis and the ratio sits below 0.5. A ratio near 1 means the phone is moving independently
+of the bike, which is what happens in a jersey pocket, a backpack, or a loose mount. In
+that state the roughness figure measures the phone, not the trail, and jump detection fires
+on the phone going weightless rather than the wheels leaving the ground.
+
+The detail also reports the share of readings **at the sensor ceiling**. The accelerometer
+saturates somewhere above 9 g, and once a hit clips, its recorded force is a floor rather
+than a measurement. A ride with any appreciable clipping has unreliable landing forces.
+
 ## Airtime
 
 In free fall every axis reads close to zero, so a collapse in total g is the giveaway. Three
@@ -76,6 +89,21 @@ fooling it, that is the place to adjust:
     MEAN_G 0.40 g  average across the dip
     LAND_G 1.6 g   how hard a landing must be
     GAP_MS 250     ignore a new jump this soon after the last
+
+## Where a ride's track starts
+
+The GPS watch runs before you tap Start, so a fix is ready when you push off. The cost is
+that the first fix delivered after Start can be one measured earlier, wherever the app was
+opened. Two rules keep it out of the ride:
+
+- a fix whose own timestamp predates the ride is discarded
+- the ride's first stored point must be accurate to 25 m or better
+
+The second matters because iOS will re-deliver a stale position with a fresh timestamp, and
+the tell is that it is wifi derived and coarse. A bad seed point distorts both the track
+shape and the distance total, so the app waits rather than accept one. The GPS chip shows
+"GPS settling" while it waits, and the count of discarded fixes goes into the CSV header as
+`gps_prestart_fixes_dropped`.
 
 ## If GPS stops working
 

@@ -291,6 +291,7 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
     <div class="head">
       <h2>Rides</h2>
       <span class="sub" id="ridesSub" style="margin-left:auto"></span>
+      <button id="btnDay" style="font-size:15px;color:var(--orange)">Send a day</button>
       <button id="btnEdit" style="font-size:15px;color:var(--orange)">Edit</button>
     </div>
     <ul class="list" id="rideList"></ul>
@@ -320,11 +321,8 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
       <button class="big go" id="btnAllow">Allow motion access</button>
       <button class="big" id="btnUpdate">Check for update</button>
       <button class="big" id="btnRefetch">Re-download the app files</button>
-      <button class="big" id="btnShareTest">Test what this phone will share</button>
       <button class="big" id="btnWipe" style="color:var(--red)">Delete all rides</button>
     </div>
-
-    <div class="rows" id="shareProbe" style="display:none"></div>
 
     <div class="tip">
       <p><b>If the live reading stays empty:</b> the permission was refused at some point and
@@ -370,6 +368,22 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
       <button class="act" data-x="gpx">GPX track<span class="hint">for maps</span></button>
       <button class="act" data-x="summary">Summary JSON<span class="hint" id="hSum"></span></button>
       <button class="act" data-x="json">Everything as JSON<span class="hint">raw</span></button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet" id="daySheet">
+  <div class="sheetbar">
+    <button id="dayBack">Close</button>
+    <span class="t">Send a day of rides</span>
+    <span style="width:46px"></span>
+  </div>
+  <div class="sheetbody">
+    <ul class="list" id="dayList"></ul>
+    <div class="tip">
+      <p>Bundles every ride from one day into a single CSV, one row per second, each row
+      tagged with which ride it came from. A full day is usually well under 100 KB, small
+      enough to copy and paste.</p>
     </div>
   </div>
 </div>
@@ -586,7 +600,8 @@ var R = {
   nA: 0, nG: 0,
   lastFix: null,
   dist: 0, drop: 0, maxSpd: 0, spd: 0,
-  lastAlt: null,
+  lastAlt: null, altWin: [],
+  accSum: 0, movePt: null, moveT: 0, preDrop: 0, seeded: false,
   ema: 1,                               // smoothed |a| in g, for the high-pass
   sumSq: 0, nSq: 0, peak: 0,
   secBucketSq: 0, secBucketN: 0, secIdx: 0, rough: [],
@@ -594,6 +609,7 @@ var R = {
   maxTurn: 0, turnNow: 0,
   air: null,
   gpsDrops: 0,
+  clip: 0, rawPeak: 0,
   ring: new Float32Array(220), ringI: 0,
   hzCount: 0, hz: 0, hzT: 0,
   gaps: 0,
@@ -605,11 +621,13 @@ function resetRecorder() {
   R.aLX = []; R.aLY = []; R.aLZ = []; R.aRA = []; R.aRB = []; R.aRG = [];
   R.gBuf = [];
   R.aSeq = 0; R.gSeq = 0; R.nA = 0; R.nG = 0;
-  R.lastFix = null; R.dist = 0; R.drop = 0; R.maxSpd = 0; R.spd = 0; R.lastAlt = null;
+  R.lastFix = null; R.dist = 0; R.drop = 0; R.maxSpd = 0; R.spd = 0; R.lastAlt = null; R.altWin = [];
+  R.accSum = 0; R.movePt = null; R.moveT = 0; R.preDrop = 0; R.seeded = false;
   R.ema = 1; R.sumSq = 0; R.nSq = 0; R.peak = 0;
   R.vSum = 0; R.lSum = 0; R.vlN = 0; R.maxTurn = 0; R.turnNow = 0;
   R.air = makeAirDetector();
   R.gpsDrops = 0;
+  R.clip = 0; R.rawPeak = 0;
   R.secBucketSq = 0; R.secBucketN = 0; R.secIdx = 0; R.rough = [];
   R.ring = new Float32Array(220); R.ringI = 0;
   R.hzCount = 0; R.hz = 0; R.gaps = 0;
@@ -677,6 +695,8 @@ function onMotion(e) {
   R.ringI = (R.ringI + 1) % R.ring.length;
 
   if (R.on) {
+    if (mag > 9) R.clip++;          // near the sensor ceiling; readings above this lie
+    if (mag > R.rawPeak) R.rawPeak = mag;
     if (R.air) R.air.push(t, mag);
     R.sumSq += hp * hp; R.nSq++;
     var ab = Math.abs(hp); if (ab > R.peak) R.peak = ab;
@@ -714,17 +734,59 @@ function onFix(pos) {
 
   if (!R.on) { R.lastFix = p; return; }
 
+  /* The watch runs before recording so there is a fix ready when you push off, but
+     that also means the first fix delivered after Start can be one measured minutes
+     earlier, at the trailhead car park or wherever the app was opened. Every fix
+     carries the time it was actually taken, so drop the ones that predate the ride. */
+  if (pos.timestamp && pos.timestamp < R.t0 - 1500) {
+    R.preDrop++;
+    gpsNote = "waiting for a fresh fix";
+    setDot($("dGps"), "warn", "GPS settling", $("tGps"));
+    return;
+  }
+
+  /* That is not enough on its own: iOS will re-deliver a stale position with a fresh
+     timestamp. A coarse fix is the other tell, since a cached one is wifi derived and
+     accurate to tens of metres. So the first point of a ride has to be a sharp fix.
+     A bad seed poisons both the track shape and the distance total. */
+  if (!R.seeded) {
+    if (c.accuracy > 25) {
+      R.preDrop++;
+      gpsNote = "settling, fix still " + Math.round(c.accuracy) + " m";
+      setDot($("dGps"), "warn", "GPS settling", $("tGps"));
+      return;
+    }
+    R.seeded = true;
+    R.lastFix = null;          // nothing before this counts towards distance
+  }
+
   R.gBuf.push(p); R.nG++;
+  R.accSum += c.accuracy;
+  /* Indoors iOS hands back a wifi derived position that never changes. Fixes keep
+     arriving so nothing looks broken, but the track is a single point. Notice it. */
+  if (!R.movePt) { R.movePt = p; R.moveT = Date.now(); }
+  else if (haversine(R.movePt, p) > 5) { R.movePt = p; R.moveT = Date.now(); }
   if (R.lastFix && c.accuracy <= 30) {
     var d = haversine(R.lastFix, p);
     if (d > 0.7 && d < 120) R.dist += d;
   }
-  if (p.alt !== null) {
-    if (R.lastAlt === null) R.lastAlt = p.alt;
-    else {
-      var dh = p.alt - R.lastAlt;
-      if (dh < -1.5) { R.drop += -dh; R.lastAlt = p.alt; }
-      else if (dh > 1.5) { R.lastAlt = p.alt; }
+  /* GPS altitude is noisy enough that a 1.5 m threshold banks the noise as real
+     descent. Take fixes only when the horizontal fix is decent, run a 5 point
+     median, and require 2.5 m of movement before believing it. Window and threshold
+     were fitted against a real run whose true net drop was known. */
+  if (p.alt !== null && c.accuracy <= 25 &&
+      (p.altAcc === null || p.altAcc === undefined || p.altAcc <= 20)) {
+    R.altWin.push(p.alt);
+    if (R.altWin.length > 3) R.altWin.shift();
+    if (R.altWin.length === 3) {
+      var sorted = R.altWin.slice().sort(function (a, b) { return a - b; });
+      var med = sorted[1];
+      if (R.lastAlt === null) R.lastAlt = med;
+      else {
+        var dh = med - R.lastAlt;
+        if (dh < -2.5) { R.drop += -dh; R.lastAlt = med; }
+        else if (dh > 2.5) { R.lastAlt = med; }
+      }
     }
   }
   R.lastFix = p;
@@ -753,7 +815,7 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.10";
+var VERSION = "1.15";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
@@ -945,6 +1007,12 @@ function stop() {
     jumps: R.air ? R.air.finish() : [],
     airMs: R.air ? Math.round(R.air.airMs) : 0,
     gpsDrops: R.gpsDrops,
+    gpsAcc: R.nG ? Math.round(R.accSum / R.nG * 10) / 10 : null,
+    gpsStuck: (R.nG > 5 && R.moveT && Date.now() - R.moveT > 60000) ? 1 : 0,
+    gpsPreDrop: R.preDrop,
+    clip: R.clip,
+    rawPeak: Math.round(R.rawPeak * 100) / 100,
+    mountRatio: (R.vlN && R.vSum) ? Math.round(Math.sqrt(R.lSum / R.vSum) * 100) / 100 : null,
     gaps: R.gaps,
     rough: R.rough
   };
@@ -953,7 +1021,13 @@ function stop() {
     $("btnRec").classList.remove("stop");
     $("recLabel").textContent = "Start recording";
     $("clock").classList.add("idle");
-    toast("Saved " + hms(ride.dur) + " with " + ride.nAccel.toLocaleString() + " samples");
+    if (ride.nGps === 0) {
+      toast("Saved, but no GPS fix arrived at all. Check the GPS chip before the next run.");
+    } else if (ride.gpsStuck || ride.dist === 0) {
+      toast("Saved. GPS reported the same spot throughout, which happens indoors or with no sky view.");
+    } else {
+      toast("Saved " + hms(ride.dur) + " with " + ride.nAccel.toLocaleString() + " samples");
+    }
     renderRides();
     go("scRides");
   });
@@ -1307,42 +1381,6 @@ $("btnEdit").onclick = function () {
 };
 $("btnWipe").onclick = deleteAllRides;
 
-/* Which file types iOS will actually hand to the share sheet varies by version and
-   is not documented anywhere useful, so ask the phone directly. */
-$("btnShareTest").onclick = function () {
-  var box = $("shareProbe");
-  if (!navigator.share) {
-    box.innerHTML = '<div class="row"><span>Share support</span><span class="rv no">none at all</span></div>';
-    box.style.display = "block";
-    return;
-  }
-  var sample = new Blob(['{"test":1}'], { type: "text/plain" });
-  var tries = [
-    ["ride.json", "application/json"],
-    ["ride.json", "text/plain"],
-    ["ride.json.txt", "text/plain"],
-    ["ride.txt", "text/plain"],
-    ["ride.csv", "text/csv"],
-    ["ride.gpx", "application/gpx+xml"]
-  ];
-  var html = '<div class="row"><span>canShare available</span><span class="rv ' +
-             (navigator.canShare ? "ok\">yes" : "no\">no, cannot probe") + '</span></div>';
-  for (var i = 0; i < tries.length; i++) {
-    var f = makeFile(sample, tries[i][0], tries[i][1]);
-    var ok = false;
-    if (f && navigator.canShare) {
-      try { ok = navigator.canShare({ files: [f] }); } catch (e) { ok = false; }
-    }
-    html += '<div class="row"><span>' + tries[i][0] + '</span>' +
-            '<span class="rv ' + (ok ? "ok" : "no") + '">' + (ok ? "accepted" : "refused") + '</span></div>';
-  }
-  html += '<div class="row"><span>Share plain text</span><span class="rv ' +
-          (navigator.canShare && navigator.canShare({ text: "x" }) ? "ok\">accepted" : "no\">refused") +
-          '</span></div>';
-  box.innerHTML = html;
-  box.style.display = "block";
-  toast("Tell Claude which rows say accepted");
-};
 
 function renderRides() {
   return getAll("rides").then(function (rows) {
@@ -1416,6 +1454,17 @@ function openRide(r) {
     }
     if (r.maxTurn) cells.push([r.maxTurn + " deg/s", "fastest rotation"]);
     if (r.gpsDrops) cells.push([r.gpsDrops, "GPS restarts during the ride"]);
+    if (r.gpsAcc !== null && r.gpsAcc !== undefined) {
+      cells.push([r.gpsAcc.toFixed(0) + " m", "average fix accuracy, over 30 means no sky view"]);
+    }
+    if (r.gpsStuck) cells.push(["stuck", "GPS reported one spot the whole time"]);
+    if (r.mountRatio !== null && r.mountRatio !== undefined) {
+      cells.push([r.mountRatio.toFixed(2), "sideways to vertical, under 0.5 means a firm mount"]);
+    }
+    if (r.clip) {
+      cells.push([Math.round(r.clip / Math.max(r.nAccel, 1) * 1000) / 10 + "%",
+                  "readings at the sensor ceiling, treat jump forces as unreliable"]);
+    }
     $("sheetGrid").innerHTML = cells.map(function (cc) {
       return cellHtml(cc[0], cc[1]);
     }).join("");
@@ -1613,12 +1662,15 @@ function deliver(name, parts, mime) {
   }
 }
 
-function showExport(why) {
+function showExport(why, ok) {
   if (!lastExport) return;
   var kb = lastExport.blob.size / 1024;
   $("expName").textContent = lastExport.name;
   $("expSize").textContent = kb > 1024 ? (kb / 1024).toFixed(2) + " MB" : kb.toFixed(0) + " KB";
   $("expWhy").textContent = why;
+  $("expWhy").className = "rv " + (ok ? "ok" : "no");
+  $("expShare").classList.toggle("go", !!ok);
+  $("expCopy").classList.toggle("go", !ok);
   var url = URL.createObjectURL(lastExport.blob);
   $("expDl").href = url;
   $("expDl").setAttribute("download", lastExport.name);
@@ -1758,7 +1810,14 @@ function metaLines(r, jumps) {
     "# vertical_rms_g," + (r.vRms === null || r.vRms === undefined ? "" : r.vRms),
     "# lateral_rms_g," + (r.lRms === null || r.lRms === undefined ? "" : r.lRms),
     "# max_rotation_degs," + (r.maxTurn || ""),
+    "# gps_fixes," + (r.nGps || 0),
+    "# gps_mean_accuracy_m," + (r.gpsAcc === null || r.gpsAcc === undefined ? "" : r.gpsAcc),
+    "# gps_position_stuck," + (r.gpsStuck ? "yes" : "no"),
+    "# gps_prestart_fixes_dropped," + (r.gpsPreDrop || 0),
     "# gps_restarts," + (r.gpsDrops || 0),
+    "# mount_ratio," + (r.mountRatio === null || r.mountRatio === undefined ? "" : r.mountRatio),
+    "# clipped_samples," + (r.clip || 0),
+    "# raw_peak_g," + (r.rawPeak || ""),
     "# jumps," + ((jumps && jumps.length) || 0),
     "# airtime_s," + (((r.airMs || 0) / 1000).toFixed(2))
   ];
@@ -1772,10 +1831,13 @@ function metaLines(r, jumps) {
   return L.join("\n") + "\n";
 }
 
-function inAirAt(jumps, t) {
+/* A 210 ms jump starting at 33155 ms belongs to second 33, but testing only the
+   instant t=33000 misses it. Test whether the jump overlaps the window at all. */
+function inAirAt(jumps, t, span) {
   if (!jumps) return 0;
+  var w = span || 1;
   for (var j = 0; j < jumps.length; j++) {
-    if (t >= jumps[j].t && t <= jumps[j].t + jumps[j].dur) return 1;
+    if (jumps[j].t < t + w && jumps[j].t + jumps[j].dur > t) return 1;
   }
   return 0;
 }
@@ -1803,7 +1865,7 @@ function combinedCsvParts(r, pts, chunks, jumps) {
         fx(ch.x, i) + "," + fx(ch.y, i) + "," + fx(ch.z, i) + "," +
         fx(ch.lx, i) + "," + fx(ch.ly, i) + "," + fx(ch.lz, i) + "," +
         fx(ch.ra, i) + "," + fx(ch.rb, i) + "," + fx(ch.rg, i) + "," +
-        gpsCols + "," + inAirAt(jumps, t));
+        gpsCols + "," + inAirAt(jumps, t, 17));
       if (buf.length >= 2000) { parts.push(buf.join("\n") + "\n"); buf = []; }
     }
   }
@@ -1814,7 +1876,7 @@ function combinedCsvParts(r, pts, chunks, jumps) {
 /* One row per second. A ten minute ride is a few hundred rows, small enough to open
    anywhere and to paste into a message if the share sheet keeps refusing. */
 function secondCsvParts(r, pts, rough, jumps) {
-  var head = ["t_s", "roughness_g", "lat", "lon", "alt_m", "speed_kmh", "in_air"];
+  var head = ["t_s", "roughness_g", "lat", "lon", "alt_m", "gps_acc_m", "speed_kmh", "in_air"];
   var parts = [metaLines(r, jumps), head.join(",") + "\n"];
   var secs = Math.max(rough ? rough.length : 0, Math.ceil((r.dur || 0) / 1000));
   var sorted = (pts || []).slice().sort(function (a, b) { return a.t - b.t; });
@@ -1827,13 +1889,134 @@ function secondCsvParts(r, pts, rough, jumps) {
       (last ? last.lat.toFixed(7) : "") + "," +
       (last ? last.lon.toFixed(7) : "") + "," +
       (last && last.alt !== null && last.alt !== undefined ? last.alt.toFixed(1) : "") + "," +
+      (last && last.acc !== null && last.acc !== undefined ? last.acc.toFixed(1) : "") + "," +
       (last && last.spd !== null && last.spd !== undefined && last.spd >= 0
         ? (last.spd * 3.6).toFixed(1) : "") + "," +
-      inAirAt(jumps, t));
+      inAirAt(jumps, t, 1000));
   }
   parts.push(rows.join("\n") + "\n");
   return parts;
 }
+
+function dayKey(ts) {
+  var d = new Date(ts);
+  return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+}
+
+/* Every ride from one day in a single table, each row tagged with its ride number.
+   Per ride summaries and jumps ride along as # comment lines above the data. */
+function dayParts(key, list, gpsByRide) {
+  var head = [
+    "# bumplog " + VERSION,
+    "# day," + key,
+    "# rides," + list.length,
+    "# ride_columns,n,id,started,duration_s,distance_m,descended_m,top_speed_kmh," +
+      "roughness_rms_g,peak_g,vertical_rms_g,lateral_rms_g,mount_ratio,clipped_samples," +
+      "accel_samples,jumps,airtime_s,gps_fixes,gps_mean_accuracy_m,gps_stuck,gps_restarts," +
+      "gps_prestart_dropped"
+  ];
+  var jumpLines = [], rows = [], n, i;
+
+  function val(v) { return (v === null || v === undefined) ? "" : v; }
+
+  for (n = 0; n < list.length; n++) {
+    var r = list[n];
+    var jumps = r.jumps || [];
+    head.push("# ride," + (n + 1) + "," + r.id + "," + new Date(r.startedAt).toISOString() + "," +
+      ((r.dur || 0) / 1000).toFixed(1) + "," + (r.dist || 0) + "," + (r.drop || 0) + "," +
+      val(r.maxSpd) + "," + val(r.rms) + "," + val(r.peak) + "," +
+      val(r.vRms) + "," + val(r.lRms) + "," + val(r.mountRatio) + "," + (r.clip || 0) + "," +
+      (r.nAccel || 0) + "," + jumps.length + "," + ((r.airMs || 0) / 1000).toFixed(2) + "," +
+      (r.nGps || 0) + "," + val(r.gpsAcc) + "," + (r.gpsStuck ? "yes" : "no") + "," +
+      (r.gpsDrops || 0) + "," + (r.gpsPreDrop || 0));
+    for (i = 0; i < jumps.length; i++) {
+      jumpLines.push("# jump," + (n + 1) + "," + jumps[i].t + "," + jumps[i].dur + "," +
+        jumps[i].peak + "," + airHeight(jumps[i].dur).toFixed(2));
+    }
+
+    var pts = [];
+    (gpsByRide[n] || []).sort(bySeq).forEach(function (ch) { pts = pts.concat(ch.p); });
+    pts.sort(function (a, b) { return a.t - b.t; });
+
+    var rough = r.rough || [];
+    var secs = Math.max(rough.length, Math.ceil((r.dur || 0) / 1000));
+    var g = 0, last = null;
+    for (var sec = 0; sec < secs; sec++) {
+      var t = sec * 1000;
+      while (g < pts.length && pts[g].t <= t + 500) { last = pts[g++]; }
+      rows.push((n + 1) + "," + sec + "," +
+        (rough[sec] !== undefined ? rough[sec] : "") + "," +
+        (last ? last.lat.toFixed(7) : "") + "," +
+        (last ? last.lon.toFixed(7) : "") + "," +
+        (last && last.alt !== null && last.alt !== undefined ? last.alt.toFixed(1) : "") + "," +
+        (last && last.acc !== null && last.acc !== undefined ? last.acc.toFixed(1) : "") + "," +
+        (last && last.spd !== null && last.spd !== undefined && last.spd >= 0
+          ? (last.spd * 3.6).toFixed(1) : "") + "," +
+        inAirAt(jumps, t, 1000));
+    }
+  }
+  if (jumpLines.length) {
+    jumpLines.unshift("# jump_columns,ride_n,start_ms,duration_ms,landing_g,hang_height_m");
+  }
+  return [
+    head.join("\n") + "\n",
+    jumpLines.length ? jumpLines.join("\n") + "\n" : "",
+    "ride,t_s,roughness_g,lat,lon,alt_m,gps_acc_m,speed_kmh,in_air\n",
+    rows.join("\n") + "\n"
+  ];
+}
+
+function openDaySheet() {
+  var days = {}, order = [];
+  for (var i = 0; i < rides.length; i++) {
+    var k = dayKey(rides[i].startedAt);
+    if (!days[k]) { days[k] = []; order.push(k); }
+    days[k].push(rides[i]);
+  }
+  var ul = $("dayList");
+  ul.innerHTML = "";
+  if (!order.length) {
+    ul.innerHTML = '<li class="empty"><b>No rides yet</b>Record something first.</li>';
+  }
+  order.forEach(function (k) {
+    var group = days[k];
+    var mins = 0, samples = 0;
+    group.forEach(function (r) { mins += (r.dur || 0); samples += (r.nAccel || 0); });
+    var li = document.createElement("li");
+    var b = document.createElement("button");
+    b.className = "ride";
+    b.innerHTML = '<span><span class="when"></span><span class="facts"></span></span>';
+    b.querySelector(".when").textContent = dateLabel(group[0].startedAt).split(",")[0];
+    b.querySelector(".facts").innerHTML =
+      group.length + (group.length === 1 ? " ride" : " rides") + "<i>|</i>" +
+      hms(mins) + " riding<i>|</i>" + (samples / 1000).toFixed(0) + "k samples";
+    b.onclick = function () { exportDay(k, group); };
+    li.appendChild(b);
+    ul.appendChild(li);
+  });
+  $("daySheet").classList.add("on");
+}
+
+function exportDay(key, group) {
+  var list = group.slice().sort(function (a, b) { return a.startedAt - b.startedAt; });
+  toast("Reading " + list.length + (list.length === 1 ? " ride" : " rides"));
+  Promise.all(list.map(function (r) { return byRide("gps", r.id); })).then(function (res) {
+    var parts = dayParts(key, list, res);
+    var name = "bumplog-" + key + "-day.csv";
+    try {
+      lastExport = {
+        blob: new Blob(parts, { type: "text/csv;charset=utf-8" }),
+        name: name, parts: parts, mime: "text/csv"
+      };
+    } catch (e) { toast("Could not build the file: " + e); return; }
+    $("daySheet").classList.remove("on");
+    showExport(list.length + " rides, ready to send", true);
+  }).catch(function (e) {
+    toast("Could not read the rides: " + (e && e.message ? e.message : e));
+  });
+}
+$("btnDay").onclick = openDaySheet;
+$("dayBack").onclick = function () { $("daySheet").classList.remove("on"); };
 
 /* Everything except the raw stream, plus 1.5 s of raw either side of each jump so
    the air detection can still be checked. Small enough to move around easily. */
