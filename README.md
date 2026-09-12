@@ -52,18 +52,32 @@ Tap any row on the Rides tab. Three charts, all drawn from the samples on the ph
 
 No map tiles are fetched, so all of this works with no signal.
 
+## Surface
+
+Roughness separates surfaces cleanly. From a day of real rides on this phone:
+
+| roughness | what it was |
+| --- | --- |
+| 0.18 to 0.28 g | street |
+| around 0.50 g | gravel, light chatter |
+| 0.64 to 0.86 g | woodland trail |
+
+The ride detail names the surface from those bands.
+
 ## Mounting
 
-How the phone is held changes what the numbers mean. The ride detail shows a **sideways to
-vertical** ratio: a firm handlebar or stem mount puts most of the energy on the vertical
-axis and the ratio sits below 0.5. A ratio near 1 means the phone is moving independently
-of the bike, which is what happens in a jersey pocket, a backpack, or a loose mount. In
-that state the roughness figure measures the phone, not the trail, and jump detection fires
-on the phone going weightless rather than the wheels leaving the ground.
+The ride detail shows the ratio of sideways to vertical energy. Shapeless shaking with no
+preferred direction gives 1.41, so anything below that means vertical hits dominate. Across
+thirteen rides on one day this sat between 0.73 and 1.05 regardless of surface, including a
+very smooth street run, so **it does not currently tell you whether the phone is firmly
+mounted**. Treat it as raw information until there is data from a known rigid mount to
+calibrate it against.
 
-The detail also reports the share of readings **at the sensor ceiling**. The accelerometer
-saturates somewhere above 9 g, and once a hit clips, its recorded force is a floor rather
-than a measurement. A ride with any appreciable clipping has unreliable landing forces.
+The detail also reports the share of readings **at the sensor ceiling**. Three separate
+rides on one day peaked at 9.64, 9.65 and 9.65 g, which is a hard ceiling rather than a
+coincidence, so the accelerometer saturates around there. Once a hit clips, its recorded
+force is a floor rather than a measurement, and landing forces from that ride are
+unreliable. The street rides only reached 3.3 g and never touched it.
 
 ## Airtime
 
@@ -89,6 +103,46 @@ fooling it, that is the place to adjust:
     MEAN_G 0.40 g  average across the dip
     LAND_G 1.6 g   how hard a landing must be
     GAP_MS 250     ignore a new jump this soon after the last
+
+## Sessions and comparing runs
+
+The Rides tab groups by the day a run happened on. Each day is a **session**, numbered in
+the order they occurred, so Session 1 is the first day you ever recorded.
+
+Within a session the runs are grouped by **where they happened**, which is what makes two
+runs comparable. Each ride gets an anchor: the median latitude and longitude of its usable
+fixes, median rather than mean so a stray tower fix cannot drag it across the valley. Rides
+whose anchors fall within 500 m of each other become a **spot**, numbered in the order they
+first occurred, and the runs inside a spot are numbered Run 1, Run 2 and so on.
+
+The spot header shows how many runs it holds, their mean roughness and their mean fix
+accuracy, so repeated runs of the same trail read against each other directly. Rides with no
+usable position land in **Location unknown** at the end.
+
+500 m was chosen against a real day of thirteen rides: it merges two runs whose centres sat
+362 m apart and keeps a trail run separate from a street run 900 m away. `SPOT_RADIUS` at the
+top of the script changes it.
+
+The day export carries `# session,N` plus `spot`, `anchor_lat` and `anchor_lon` per ride.
+
+## GPS accuracy gates
+
+iOS reports accuracy in discrete buckets and is pessimistic about it. Calibrated against a
+day of thirteen rides on an iPhone 6s:
+
+| what was seen | accuracy reported |
+| --- | --- |
+| open sky, clean track | 5 to 10 m |
+| street riding, track still followed the road exactly | a flat 65 m |
+| no satellite lock, position from cell towers | 2000 to 13800 m |
+
+So the thresholds are deliberately loose. Fixes coarser than 300 m are rejected outright as
+tower guesses; anything up to 200 m is used for distance and height. A step only counts
+towards distance if it is larger than `0.15 * accuracy` and does not imply more than 22 m/s,
+which filters jitter without discarding real movement.
+
+An earlier version demanded 25 to 30 m and produced a distance of zero on street rides where
+the track was plainly correct.
 
 ## Where a ride's track starts
 
@@ -116,8 +170,8 @@ error at all. The app now handles that itself:
   seconds while idle
 - returning to the app after more than 10 seconds away forces a fresh watch
 - a refused permission stops the retries instead of looping forever
-- the watch is released after 3 minutes idle to save battery, and the GPS chip at the top
-  of the screen wakes it again on a tap
+- the watch runs from the moment the app opens and is never switched off, so a run never
+  waits on a tap; it is rebuilt every 10 minutes while idle to stop iOS degrading it
 
 Setup shows how long ago the last fix arrived and how many restarts have happened. A ride
 that needed restarts records the count, shown on its detail screen.
