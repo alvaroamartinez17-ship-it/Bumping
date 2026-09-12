@@ -623,7 +623,7 @@ var R = {
   lastFix: null,
   dist: 0, drop: 0, maxSpd: 0, spd: 0,
   lastAlt: null, altWin: [],
-  accSum: 0, movePt: null, moveT: 0, preDrop: 0, seeded: false, coarse: 0,
+  accSum: 0, movePt: null, moveT: 0, preDrop: 0, seeded: false, coarse: 0, fixT: [],
   ema: 1,                               // smoothed |a| in g, for the high-pass
   sumSq: 0, nSq: 0, peak: 0,
   secBucketSq: 0, secBucketN: 0, secIdx: 0, rough: [],
@@ -645,7 +645,7 @@ function resetRecorder() {
   R.aSeq = 0; R.gSeq = 0; R.nA = 0; R.nG = 0;
   R.lastFix = null; R.dist = 0; R.drop = 0; R.maxSpd = 0; R.spd = 0; R.lastAlt = null; R.altWin = [];
   R.accSum = 0; R.movePt = null; R.moveT = 0; R.preDrop = 0; R.seeded = false;
-  R.coarse = 0;
+  R.coarse = 0; R.fixT = [];
   R.ema = 1; R.sumSq = 0; R.nSq = 0; R.peak = 0;
   R.vSum = 0; R.lSum = 0; R.vlN = 0; R.maxTurn = 0; R.turnNow = 0;
   R.air = makeAirDetector();
@@ -772,14 +772,18 @@ function onFix(pos) {
      timestamp. A coarse fix is the other tell, since a cached one is wifi derived and
      accurate to tens of metres. So the first point of a ride has to be a sharp fix.
      A bad seed poisons both the track shape and the distance total. */
-  if (c.accuracy > GPS_STORE_ACC) {      // cell tower fix, not a location
+  /* Coarse fixes used to be thrown away here. They are kept now: they cost almost
+     nothing, and discarding them left no record of what the receiver was doing during
+     a run with no lock. They are excluded from distance, height and the anchor below. */
+  var coarse = c.accuracy > GPS_STORE_ACC;
+  if (coarse) {
     R.coarse++;
     gpsNote = "no satellite lock, fix is " + Math.round(c.accuracy / 1000) + " km wide";
     setDot($("dGps"), "bad", "GPS no lock", $("tGps"));
-    return;
   }
 
   if (!R.seeded) {
+    if (coarse) { R.gBuf.push(p); R.nG++; R.fixT.push(p.t); return; }
     if (c.accuracy > GPS_SEED_ACC && Date.now() - R.t0 < GPS_SEED_WAIT) {
       R.preDrop++;
       gpsNote = "settling, fix still " + Math.round(c.accuracy) + " m";
@@ -791,12 +795,14 @@ function onFix(pos) {
   }
 
   R.gBuf.push(p); R.nG++;
+  R.fixT.push(p.t);
   R.accSum += c.accuracy;
   /* Indoors iOS hands back a wifi derived position that never changes. Fixes keep
      arriving so nothing looks broken, but the track is a single point. Notice it. */
+  if (coarse) { R.lastFix = p; return; }
   if (!R.movePt) { R.movePt = p; R.moveT = Date.now(); }
   else if (haversine(R.movePt, p) > 5) { R.movePt = p; R.moveT = Date.now(); }
-  if (R.lastFix && c.accuracy <= GPS_USE_ACC) {
+  if (!coarse && R.lastFix && c.accuracy <= GPS_USE_ACC) {
     var d = haversine(R.lastFix, p);
     var dt = Math.max(0.2, (p.t - R.lastFix.t) / 1000);
     /* Ignore movement smaller than the fix is uncertain, and steps that would need
@@ -808,7 +814,7 @@ function onFix(pos) {
      descent. Take fixes only when the horizontal fix is decent, run a 5 point
      median, and require 2.5 m of movement before believing it. Window and threshold
      were fitted against a real run whose true net drop was known. */
-  if (p.alt !== null && c.accuracy <= GPS_SEED_ACC &&
+  if (!coarse && p.alt !== null && c.accuracy <= GPS_SEED_ACC &&
       (p.altAcc === null || p.altAcc === undefined || p.altAcc <= 40)) {
     R.altWin.push(p.alt);
     if (R.altWin.length > 3) R.altWin.shift();
@@ -824,7 +830,7 @@ function onFix(pos) {
     }
   }
   R.lastFix = p;
-  if (R.gBuf.length >= 20) flushGps();
+  if (R.gBuf.length >= 5) flushGps();
 }
 
 function flushAccel() {
@@ -849,7 +855,7 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.18";
+var VERSION = "1.19";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
@@ -928,7 +934,11 @@ $("chipMotion").onclick = function () {
    the dot red and left the handle set, so nothing ever restarted it and GPS stayed
    dead until the app was reloaded. Now every failure tears the watch down and
    builds a new one, and a watchdog catches the silent deaths that raise no error. */
-var GPS_OPTS = { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 };
+/* No timeout on purpose. watchPosition raises TIMEOUT when no fix has arrived yet,
+   and the old 20 s limit fired constantly in woodland where fixes legitimately
+   arrive one every 10 to 50 s. Each error tore the watch down and started the
+   acquisition again from cold, which is the opposite of what a weak signal needs. */
+var GPS_OPTS = { enableHighAccuracy: true, maximumAge: 2000 };
 
 /* Calibrated against a day of thirteen rides on this phone. iOS reports accuracy in
    discrete buckets and is pessimistic: a street ride tracked a road cleanly while
@@ -965,6 +975,7 @@ function stopGps() {
 
 function restartGps(why) {
   if (gpsDead) return;
+  lastRestartAt = Date.now();
   gpsRestarts++;
   if (R.on) R.gpsDrops++;
   gpsNote = "restarting after " + why;
@@ -992,15 +1003,25 @@ function onGpsErr(err) {
 }
 
 /* Some failures raise no error at all: fixes simply stop arriving. */
+/* Measured on a real day: one fix a second only happened on the first run, and
+   everything after averaged one every 6 to 55 s. A 15 s watchdog would have been
+   restarting the watch mid-acquisition on most of them. These limits are set well
+   beyond the worst observed gap, and a restart cannot repeat inside 90 s. */
+var GPS_SILENT_RIDE = 60000;
+var GPS_SILENT_IDLE = 150000;
+var GPS_RESTART_GAP = 90000;
+var lastRestartAt = 0;
+
 function gpsWatchdog() {
   if (gpsDead) return;
-  if (gpsWatch === null) {                       // never leave it switched off
+  if (gpsWatch === null) {
     if (!gpsRetryT) startGps();
     return;
   }
   if (gpsRetryT) return;
+  if (Date.now() - lastRestartAt < GPS_RESTART_GAP) return;
   var silent = Date.now() - lastFixAt;
-  if (silent > (R.on ? 15000 : 45000)) { restartGps("silence"); return; }
+  if (silent > (R.on ? GPS_SILENT_RIDE : GPS_SILENT_IDLE)) { restartGps("silence"); return; }
   if (!R.on && Date.now() - gpsStartedAt > GPS_REFRESH_MS) restartGps("scheduled refresh");
 }
 
@@ -1058,6 +1079,9 @@ function stop() {
     gpsStuck: (R.nG > 5 && R.moveT && Date.now() - R.moveT > 60000) ? 1 : 0,
     gpsPreDrop: R.preDrop,
     gpsCoarse: R.coarse,
+    gpsFirstFix: R.fixT.length ? Math.round(R.fixT[0] / 1000) : null,
+    gpsGapMed: gapStat(R.fixT, "med"),
+    gpsGapMax: gapStat(R.fixT, "max"),
     clip: R.clip,
     rawPeak: Math.round(R.rawPeak * 100) / 100,
     mountRatio: (R.vlN && R.vSum) ? Math.round(Math.sqrt(R.lSum / R.vSum) * 100) / 100 : null,
@@ -1450,6 +1474,16 @@ function accBand(r) {
    run 900 m away. */
 var SPOT_RADIUS = 500;
 
+/* Gaps between fixes, in seconds. The median says what the receiver managed on
+   average, the worst gap says whether it stalled. */
+function gapStat(times, which) {
+  if (!times || times.length < 2) return null;
+  var g = [], i;
+  for (i = 1; i < times.length; i++) g.push((times[i] - times[i - 1]) / 1000);
+  if (which === "max") return Math.round(Math.max.apply(null, g) * 10) / 10;
+  return Math.round(median(g) * 10) / 10;
+}
+
 function median(a) {
   var v = a.slice().sort(function (x, y) { return x - y; });
   return v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
@@ -1652,8 +1686,13 @@ function openRide(r) {
       cells.push([r.mountRatio.toFixed(2), "sideways against vertical energy, 1.41 is shapeless"]);
     }
     if (r.rms) cells.push([surfaceOf(r.rms), "what the surface felt like"]);
-    if (r.gpsCoarse) {
-      cells.push([r.gpsCoarse, "fixes thrown away as cell tower guesses"]);
+    if (r.gpsCoarse) cells.push([r.gpsCoarse, "fixes too coarse to use"]);
+    if (r.gpsGapMed !== null && r.gpsGapMed !== undefined) {
+      cells.push([r.gpsGapMed + " s", "typical gap between GPS fixes"]);
+      cells.push([r.gpsGapMax + " s", "longest the GPS went quiet"]);
+    }
+    if (r.gpsFirstFix !== null && r.gpsFirstFix !== undefined) {
+      cells.push([r.gpsFirstFix + " s", "before the first fix arrived"]);
     }
     if (r.clip) {
       cells.push([Math.round(r.clip / Math.max(r.nAccel, 1) * 1000) / 10 + "%",
@@ -1685,6 +1724,10 @@ function loadRide(r) {
     var pts = [];
     gChunks.forEach(function (ch) { pts = pts.concat(ch.p); });
     openPts = pts;
+    // coarse fixes are kept in the export but would wreck the drawn track
+    var clean = pts.filter(function (q) {
+      return q.acc === null || q.acc === undefined || q.acc <= GPS_USE_ACC;
+    });
 
     var dur = Math.max(r.dur || 0, 1);
     var cols = Math.max(60, Math.round($("cvAccel").clientWidth || 340));
@@ -1696,8 +1739,8 @@ function loadRide(r) {
     var airMs = (r.airMs !== undefined && r.airMs !== null) ? r.airMs : env.airMs;
 
     drawAccel(env, rough, dur, jumps);
-    drawSpeedAlt(pts, dur);
-    drawTrack(pts, rough, jumps);
+    drawSpeedAlt(clean, dur);
+    drawTrack(clean, rough, jumps);
 
     if (jumps && jumps.length) {
       var longest = 0;
@@ -1712,10 +1755,10 @@ function loadRide(r) {
       ? "Every one of the " + env.n.toLocaleString() + " readings, gravity removed. The grey " +
         "band is the full swing, the orange edges are the typical energy each second."
       : "Nothing was stored for this ride.";
-    $("capSpeed").textContent = pts.length > 1
+    $("capSpeed").textContent = clean.length > 1
       ? "Speed in orange, ground height as the shaded area behind it."
       : "";
-    $("trackCap").textContent = pts.length > 1
+    $("trackCap").textContent = clean.length > 1
       ? "Green is the start. Brighter orange means the trail was rougher there." +
         (jumps && jumps.length ? " Yellow dots are jumps." : "")
       : "";
@@ -2008,7 +2051,10 @@ function metaLines(r, jumps) {
     "# gps_mean_accuracy_m," + (r.gpsAcc === null || r.gpsAcc === undefined ? "" : r.gpsAcc),
     "# gps_position_stuck," + (r.gpsStuck ? "yes" : "no"),
     "# gps_prestart_fixes_dropped," + (r.gpsPreDrop || 0),
-    "# gps_coarse_fixes_rejected," + (r.gpsCoarse || 0),
+    "# gps_coarse_fixes," + (r.gpsCoarse || 0),
+    "# gps_first_fix_s," + (r.gpsFirstFix === null || r.gpsFirstFix === undefined ? "" : r.gpsFirstFix),
+    "# gps_fix_gap_median_s," + (r.gpsGapMed === null || r.gpsGapMed === undefined ? "" : r.gpsGapMed),
+    "# gps_fix_gap_max_s," + (r.gpsGapMax === null || r.gpsGapMax === undefined ? "" : r.gpsGapMax),
     "# surface," + surfaceOf(r.rms),
     "# gps_restarts," + (r.gpsDrops || 0),
     "# mount_ratio," + (r.mountRatio === null || r.mountRatio === undefined ? "" : r.mountRatio),
@@ -2116,7 +2162,7 @@ function dayParts(key, list, gpsByRide) {
       "roughness_rms_g,peak_g,vertical_rms_g,lateral_rms_g,mount_ratio,clipped_samples," +
       "accel_samples,jumps,airtime_s,gps_fixes,gps_mean_accuracy_m,gps_stuck,gps_restarts," +
       "gps_prestart_dropped,gps_coarse_rejected,raw_peak_g,surface,gps_band," +
-      "spot,anchor_lat,anchor_lon"
+      "spot,gps_first_fix_s,gps_gap_median_s,gps_gap_max_s,anchor_lat,anchor_lon"
   ];
   var jumpLines = [], rows = [], n, i;
 
@@ -2133,7 +2179,8 @@ function dayParts(key, list, gpsByRide) {
       (r.nGps || 0) + "," + val(r.gpsAcc) + "," + (r.gpsStuck ? "yes" : "no") + "," +
       (r.gpsDrops || 0) + "," + (r.gpsPreDrop || 0) + "," + (r.gpsCoarse || 0) + "," +
       val(r.rawPeak) + "," + surfaceOf(r.rms).split(",")[0] + "," + accBand(r).label + "," +
-      (spotOf[r.id] || "unknown") + "," +
+      (spotOf[r.id] || "unknown") + "," + val(r.gpsFirstFix) + "," +
+      val(r.gpsGapMed) + "," + val(r.gpsGapMax) + "," +
       (hasAnchor(r) ? r.anchorLat.toFixed(5) + "," + r.anchorLon.toFixed(5) : ","));
     for (i = 0; i < jumps.length; i++) {
       jumpLines.push("# jump," + (n + 1) + "," + jumps[i].t + "," + jumps[i].dur + "," +
