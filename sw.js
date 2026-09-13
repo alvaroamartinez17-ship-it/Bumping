@@ -1,6 +1,6 @@
 /* Bumplog service worker — cache only, no network after install.
    Bump CACHE when you change any file, or the phone keeps the old copy. */
-var CACHE = "bumplog-v23";
+var CACHE = "bumplog-v27";
 var FILES = [
   "./",
   "./index.html",
@@ -29,6 +29,9 @@ self.addEventListener("activate", function (e) {
 
 self.addEventListener("fetch", function (e) {
   if (e.request.method !== "GET") return;
+  /* Map tiles and the map library come from other origins. Never cache those: the
+     app's offline copy must stay small, and a few hundred aerial tiles would bury it. */
+  if (new URL(e.request.url).origin !== self.location.origin) return;
   e.respondWith(
     caches.match(e.request).then(function (hit) {
       if (hit) return hit;

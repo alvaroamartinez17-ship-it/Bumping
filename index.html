@@ -163,22 +163,30 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .list.editing .del{display:flex}
 .list li.sect,.list li.sub{display:block;border:0}
 .sect{
-  padding:22px var(--pad) 6px;
-  font-size:17px;font-weight:700;letter-spacing:-0.02em;
+  padding:26px var(--pad) 6px;
+  font-size:23px;font-weight:700;letter-spacing:-0.03em;
 }
-.sect span{font-weight:400;color:var(--dust);font-size:13px;margin-left:8px}
+.sect span{
+  display:block;font-weight:400;color:var(--dust);font-size:13px;
+  margin:2px 0 0;letter-spacing:0;
+}
 .sub{
-  padding:10px var(--pad) 6px;
-  font-size:12.5px;color:var(--dust);
+  padding:15px var(--pad) 9px;
+  font-size:13px;color:var(--dust);
   border-top:1px solid var(--rule);
-  display:flex;justify-content:space-between;gap:12px;
 }
+.subtop{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.subname{color:var(--cream);font-weight:600;font-size:17.5px;letter-spacing:-0.02em}
+.subfacts{margin-top:3px;font-variant-numeric:tabular-nums}
 .sub b{color:var(--cream);font-weight:600}
-.sub button{color:var(--orange);font-size:12.5px}
+.sub button{color:var(--orange);font-size:14px;flex:0 0 auto}
 .legend{display:flex;flex-wrap:wrap;gap:6px 16px;padding:10px var(--pad) 0;font-size:12.5px}
 .legend span{display:flex;align-items:center;gap:6px;color:var(--dust)}
 .legend i{width:11px;height:3px;border-radius:2px;flex:0 0 auto}
-.ride .when{display:block;font-size:15px;font-weight:600}
+#mapBox{height:400px;margin:0;background:var(--panel);border-bottom:1px solid var(--rule)}
+.leaflet-container{background:var(--panel)!important;font-family:-apple-system,sans-serif}
+.leaflet-control-attribution{font-size:10px}
+.ride .when{display:block;font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
 .ride .facts{display:block;font-size:12.5px;color:var(--dust);font-variant-numeric:tabular-nums;margin-top:3px}
 .ride .facts i{font-style:normal;color:var(--rule);padding:0 7px}
 .ride canvas{width:66px;height:30px;flex:0 0 auto;margin-left:auto;opacity:.9}
@@ -225,6 +233,12 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
   padding-top:env(safe-area-inset-top);
 }
 .plottitle{font-size:15px;font-weight:600;margin:24px var(--pad) 9px;letter-spacing:-0.01em}
+/* Sheets are all position:fixed at the same z-index, so the one later in the document
+   wins. Anything opened FROM another sheet has to be lifted above it explicitly. */
+#daySheet{z-index:25}
+#mapSheet{z-index:30}
+#expSheet{z-index:40}
+#mapBox{touch-action:none;overscroll-behavior:contain}
 .sheet.on{display:flex}
 .sheetbar{
   display:flex;align-items:center;justify-content:space-between;
@@ -380,11 +394,30 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
     <p class="plotcap" id="trackCap"></p>
 
     <div class="acts">
+      <button class="act" id="detailMapBtn">Aerial map of this run<span class="hint">needs wifi</span></button>
       <button class="act" data-x="csvsec">Summary CSV, one row per second<span class="hint" id="hSec"></span></button>
       <button class="act" data-x="csvall">Everything as one CSV<span class="hint" id="hAll"></span></button>
       <button class="act" data-x="gpx">GPX track<span class="hint">for maps</span></button>
       <button class="act" data-x="summary">Summary JSON<span class="hint" id="hSum"></span></button>
       <button class="act" data-x="json">Everything as JSON<span class="hint">raw</span></button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet" id="mapSheet">
+  <div class="sheetbar">
+    <button id="mapBack">Back</button>
+    <span class="t" id="mapTitle"></span>
+    <span style="width:46px"></span>
+  </div>
+  <div class="sheetbody">
+    <div id="mapBox"></div>
+    <p class="plotcap" id="mapCap"></p>
+    <div class="legend" id="mapLegend"></div>
+    <div class="tip">
+      <p>Aerial imagery is only fetched when you are online, and only covers
+      Baden-Wuerttemberg. Line thickness is the g force at that point.</p>
+      <p>Imagery: LGL-BW, Datenlizenz Deutschland Namensnennung 2.0, www.lgl-bw.de</p>
     </div>
   </div>
 </div>
@@ -398,6 +431,9 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
   <div class="sheetbody">
     <div class="plot"><canvas id="cvCompare"></canvas></div>
     <p class="plotcap" id="cmpCap"></p>
+    <div class="plot"><canvas id="cvCmpMap"></canvas></div>
+    <p class="plotcap" id="cmpMapCap"></p>
+    <div class="btnrow"><button class="big" id="cmpMapBtn">Show on the aerial map</button></div>
     <div class="legend" id="cmpLegend"></div>
     <div class="rows" id="cmpRows"></div>
     <div class="tip">
@@ -896,7 +932,7 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.22";
+var VERSION = "1.26";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
@@ -1531,10 +1567,14 @@ function accBand(r) {
 /* A session is a calendar day, a trail is a place, a run is one descent of it. Two
    runs belong to the same trail if their anchors sit within the radius. The anchor is
    the median of a run's usable fixes rather than the mean, so one stray tower fix
-   cannot drag it across the valley. 500 m was chosen against a real day: it merges two
-   runs whose centres sat 362 m apart and keeps a trail separate from a street ride
-   900 m away. */
-var TRAIL_RADIUS = 500;
+   cannot drag it across the valley.
+
+   The anchor is where the run STARTED, not the middle of it. Checked against ten real
+   runs: runs of the same trail began 2 to 15 m apart, while the nearest different trail
+   started 388 m away, so the grouping is identical anywhere between 50 and 250 m. Using
+   the midpoint instead was much worse, because a short run and a long run down the same
+   trail have midpoints hundreds of metres apart. */
+var TRAIL_RADIUS = 100;
 
 /* Gaps between fixes, in seconds. The median says what the receiver managed on
    average, the worst gap says whether it stalled. */
@@ -1553,28 +1593,32 @@ function median(a) {
 
 /* Older rides predate these fields, so work them out once and keep them. */
 function ensureGeo(list) {
-  var need = list.filter(function (r) { return r.geoDone !== 1; });
+  var need = list.filter(function (r) { return r.geoDone !== 2; });
   if (!need.length) return Promise.resolve();
   return Promise.all(need.map(function (r) {
     return byRide("gps", r.id).then(function (chunks) {
-      var n = 0, sum = 0, la = [], lo = [];
-      chunks.forEach(function (ch) {
+      var n = 0, sum = 0, first = null, best = null;
+      chunks.sort(bySeq).forEach(function (ch) {
         (ch.p || []).forEach(function (pt) {
           if (pt.acc === null || pt.acc === undefined) return;
           sum += pt.acc; n++;
-          if (pt.acc <= GPS_USE_ACC) { la.push(pt.lat); lo.push(pt.lon); }
+          if (pt.acc <= GPS_USE_ACC) {
+            if (!first) first = pt;
+            if (!best || pt.acc < best.acc) best = pt;
+          }
         });
       });
+      var seed = first || best;
       r.gpsAcc = n ? Math.round(sum / n * 10) / 10 : null;
       if (!r.nGps) r.nGps = n;
-      if (la.length) {
-        r.anchorLat = median(la); r.anchorLon = median(lo); r.anchorN = la.length;
+      if (seed) {
+        r.anchorLat = seed.lat; r.anchorLon = seed.lon; r.anchorN = n;
       } else {
         r.anchorLat = null; r.anchorLon = null; r.anchorN = 0;
       }
-      r.geoDone = 1;
+      r.geoDone = 2;
       return put("rides", r);
-    }).catch(function () { r.geoDone = 1; });
+    }).catch(function () { r.geoDone = 2; });
   }));
 }
 
@@ -1618,11 +1662,12 @@ function rideRow(r, ul, tag) {
   b.className = "ride";
   b.innerHTML = '<span><span class="when"></span><span class="facts"></span></span><canvas></canvas>';
   b.querySelector(".when").textContent =
-    (tag ? tag + ", " : "") + (dateLabel(r.startedAt).split(", ")[1] || dateLabel(r.startedAt));
+    (tag ? tag + "  " : "") + (dateLabel(r.startedAt).split(", ")[1] || dateLabel(r.startedAt));
   b.querySelector(".facts").innerHTML =
-    hms(r.dur || 0) + "<i>|</i>" + ((r.dist || 0) / 1000).toFixed(2) + " km<i>|</i>" +
-    (r.rms || 0).toFixed(2) + " g" +
-    (r.gpsAcc ? "<i>|</i>" + Math.round(r.gpsAcc) + " m fix" : "");
+    hms((r.movSec ? r.movSec * 1000 : r.dur) || 0) + "<i>|</i>" +
+    ((r.dist || 0) / 1000).toFixed(2) + " km<i>|</i>" +
+    (r.drop || 0) + " m down<i>|</i>" +
+    (r.movRms || r.rms || 0).toFixed(2) + " g";
   b.onclick = function () { openRide(r); };
   li.appendChild(b);
   var dbtn = document.createElement("button");
@@ -1672,32 +1717,37 @@ function renderRides() {
       ul.appendChild(head);
 
       var asc = group.slice().sort(function (a, b) { return a.startedAt - b.startedAt; });
+      /* Run numbers run 1..N across the whole session in the order they were ridden,
+         not 1..n within each trail, so "run 7" means the same thing everywhere. */
+      var runNo = {};
+      asc.forEach(function (r, i) { runNo[r.id] = i + 1; });
       var res = clusterByPlace(asc);
 
       res.trails.forEach(function (runs, idx) {
-        var rms = 0, acc = 0, accN = 0;
-        runs.forEach(function (r) {
-          rms += r.rms || 0;
-          if (r.gpsAcc) { acc += r.gpsAcc; accN++; }
-        });
+        var rms = 0, n2 = 0;
+        runs.forEach(function (r) { rms += r.movRms || r.rms || 0; n2++; });
         var sub = document.createElement("li");
         sub.className = "sub";
-        sub.innerHTML =
-          "<span>Trail " + (idx + 1) + ", " + runs[0].anchorLat.toFixed(4) + " " +
-          runs[0].anchorLon.toFixed(4) + "</span>" +
-          "<span>" + runs.length + (runs.length === 1 ? " run" : " runs") +
-          ", mean <b>" + (rms / runs.length).toFixed(2) + " g</b>" +
-          (accN ? ", fixes " + Math.round(acc / accN) + " m" : "") + "</span>";
+        var top = document.createElement("div");
+        top.className = "subtop";
+        top.innerHTML = '<span class="subname">Trail ' + (idx + 1) + "</span>";
         if (runs.length > 1) {
           var cmp = document.createElement("button");
-          cmp.textContent = "Compare";
+          cmp.textContent = "Compare " + runs.length + " runs";
           cmp.onclick = function () {
-            openCompare(runs, runs.length + " runs on trail " + (idx + 1));
+            openCompare(runs, runs.length + " runs on trail " + (idx + 1), runNo);
           };
-          sub.appendChild(cmp);
+          top.appendChild(cmp);
         }
+        sub.appendChild(top);
+        var facts = document.createElement("div");
+        facts.className = "subfacts";
+        facts.textContent = runs.length + (runs.length === 1 ? " run" : " runs") +
+          ", mean " + (rms / n2).toFixed(2) + " g, from " +
+          runs[0].anchorLat.toFixed(4) + " " + runs[0].anchorLon.toFixed(4);
+        sub.appendChild(facts);
         ul.appendChild(sub);
-        runs.forEach(function (r, k2) { rideRow(r, ul, "Run " + (k2 + 1)); });
+        runs.forEach(function (r) { rideRow(r, ul, "Run " + runNo[r.id]); });
       });
 
       if (res.unplaced.length) {
@@ -1709,7 +1759,7 @@ function renderRides() {
           (res.unplaced.length === 1 ? " run" : " runs") + ", mean <b>" +
           (rmsU / res.unplaced.length).toFixed(2) + " g</b></span>";
         ul.appendChild(subU);
-        res.unplaced.forEach(function (r) { rideRow(r, ul, ""); });
+        res.unplaced.forEach(function (r) { rideRow(r, ul, "Run " + runNo[r.id]); });
       }
     });
 
@@ -1740,7 +1790,7 @@ function buildCompareSeries(r, chunks) {
         last = q;
       }
     }
-    out.push({ d: d, r: rough[sec] });
+    out.push({ d: d, r: rough[sec], lat: last ? last.lat : null, lon: last ? last.lon : null });
   }
   return out;
 }
@@ -1793,11 +1843,146 @@ function drawCompare(series, byDistance) {
   c.textAlign = "left";
 }
 
-function openCompare(runs, label) {
+/* The same tracks laid over each other. Colour identifies the run, line weight is the
+   g force at that moment, so a rough section shows up as a thickening of every line
+   that passed through it. */
+function drawCompareMap(series) {
+  var f = fitCanvas($("cvCmpMap"), 230);
+  if (!f) return;
+  var c = f.c, w = f.w, h = f.h, i, j;
+  c.clearRect(0, 0, w, h);
+  var minLa = 90, maxLa = -90, minLo = 180, maxLo = -180, any = false, maxR = 0;
+  series.forEach(function (s2) {
+    s2.pts.forEach(function (p) {
+      if (p.lat === null) return;
+      any = true;
+      if (p.lat < minLa) minLa = p.lat;
+      if (p.lat > maxLa) maxLa = p.lat;
+      if (p.lon < minLo) minLo = p.lon;
+      if (p.lon > maxLo) maxLo = p.lon;
+      if (p.r > maxR) maxR = p.r;
+    });
+  });
+  if (!any) { emptyPlot(c, w, h, "No GPS on these runs"); return; }
+  var kx = Math.cos(((minLa + maxLa) / 2) * Math.PI / 180);
+  var dLa = Math.max(maxLa - minLa, 1e-6), dLo = Math.max((maxLo - minLo) * kx, 1e-6);
+  var pad = 18, sc = Math.min((w - pad * 2) / dLo, (h - pad * 2) / dLa);
+  var ox = (w - dLo * sc) / 2, oy = (h - dLa * sc) / 2;
+  function px(p) { return ox + (p.lon - minLo) * kx * sc; }
+  function py(p) { return h - (oy + (p.lat - minLa) * sc); }
+
+  c.lineCap = "round"; c.lineJoin = "round";
+  series.forEach(function (s2) {
+    c.strokeStyle = s2.color;
+    for (j = 1; j < s2.pts.length; j++) {
+      var a = s2.pts[j - 1], b = s2.pts[j];
+      if (a.lat === null || b.lat === null) continue;
+      c.lineWidth = 1 + (maxR ? (b.r / maxR) : 0) * 5;
+      c.beginPath(); c.moveTo(px(a), py(a)); c.lineTo(px(b), py(b)); c.stroke();
+    }
+    var st = null;
+    for (j = 0; j < s2.pts.length; j++) { if (s2.pts[j].lat !== null) { st = s2.pts[j]; break; } }
+    if (st) { c.fillStyle = s2.color; c.beginPath(); c.arc(px(st), py(st), 4, 0, 6.2832); c.fill(); }
+  });
+  c.fillStyle = "#998C79"; c.font = "11px -apple-system,sans-serif";
+  c.fillText("thickest = " + maxR.toFixed(2) + " g", 5, 13);
+}
+
+/* Official Baden-Wuerttemberg aerial imagery: 20 cm colour orthophotos, open data
+   under dl-de/by-2.0. The tile matrix set is GoogleMapsCompatible, i.e. ordinary Web
+   Mercator, so Leaflet needs no projection shim. Loaded on demand and only when
+   online, because none of this works in a forest. */
+var LGL_WMTS = "https://owsproxy.lgl-bw.de/owsproxy/ows/WMTS_LGL-BW_ATKIS_DOP_20_C" +
+  "?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=DOP_20_C&STYLE=default" +
+  "&TILEMATRIXSET=GoogleMapsCompatible&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}" +
+  "&FORMAT=image/png";
+var BW_BOUNDS = [[47.40, 7.30], [49.90, 10.60]];
+var leafletReady = null, theMap = null, mapLayers = [];
+
+function ensureLeaflet() {
+  if (leafletReady) return leafletReady;
+  leafletReady = new Promise(function (res, rej) {
+    if (window.L) { res(window.L); return; }
+    var css = document.createElement("link");
+    css.rel = "stylesheet";
+    css.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
+    document.head.appendChild(css);
+    var js = document.createElement("script");
+    js.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js";
+    js.onload = function () { res(window.L); };
+    js.onerror = function () { rej(new Error("could not load the map library")); };
+    document.head.appendChild(js);
+  });
+  return leafletReady;
+}
+
+function openMapFor(series, title) {
+  $("mapTitle").textContent = title;
+  $("mapCap").textContent = "";
+  if (theMap) { theMap.remove(); theMap = null; }
+  $("mapBox").innerHTML = "";
+  $("mapSheet").classList.add("on");
+  $("mapLegend").innerHTML = series.map(function (s2) {
+    return '<span><i style="background:' + s2.color + '"></i>' + s2.name + "</span>";
+  }).join("");
+
+  var any = series.some(function (s2) {
+    return s2.pts.some(function (p) { return p.lat !== null; });
+  });
+  if (!any) { $("mapCap").textContent = "No GPS on this run, so there is nothing to place."; return; }
+  if (navigator.onLine === false) {
+    $("mapCap").textContent = "Offline. Connect to wifi and open this again for the imagery.";
+    return;
+  }
+
+  ensureLeaflet().then(function (L) {
+    if (theMap) { theMap.remove(); theMap = null; }
+    theMap = L.map("mapBox", {
+      maxBounds: BW_BOUNDS, maxBoundsViscosity: 0.8,
+      minZoom: 10, maxZoom: 19, zoomControl: true, attributionControl: true
+    });
+    L.tileLayer(LGL_WMTS, {
+      maxZoom: 19, minZoom: 10, bounds: BW_BOUNDS,
+      attribution: "LGL-BW, dl-de/by-2.0"
+    }).addTo(theMap);
+
+    var maxR = 0, all = [];
+    series.forEach(function (s2) {
+      s2.pts.forEach(function (p) { if (p.r > maxR) maxR = p.r; });
+    });
+    series.forEach(function (s2) {
+      var prev = null;
+      s2.pts.forEach(function (p) {
+        if (p.lat === null) return;
+        if (prev) {
+          L.polyline([[prev.lat, prev.lon], [p.lat, p.lon]], {
+            color: s2.color,
+            weight: 2 + (maxR ? p.r / maxR : 0) * 7,
+            opacity: 0.85
+          }).addTo(theMap);
+        }
+        all.push([p.lat, p.lon]);
+        prev = p;
+      });
+    });
+    theMap.fitBounds(L.latLngBounds(all).pad(0.15));
+    setTimeout(function () { theMap.invalidateSize(); }, 60);
+    $("mapCap").textContent = "Thicker line means higher g. Pinch or use the buttons to zoom.";
+  }).catch(function (e) {
+    $("mapCap").textContent = "Imagery unavailable: " + (e && e.message ? e.message : e);
+  });
+}
+$("mapBack").onclick = function () {
+  $("mapSheet").classList.remove("on");
+  if (theMap) { theMap.remove(); theMap = null; }
+};
+
+function openCompare(runs, label, runNo) {
   $("cmpTitle").textContent = label;
   $("cmpLegend").innerHTML = "";
   $("cmpRows").innerHTML = "";
   $("cmpCap").textContent = "Reading the runs";
+  $("cmpMapCap").textContent = "";
   $("cmpSheet").classList.add("on");
   Promise.all(runs.map(function (r) { return byRide("gps", r.id); })).then(function (res) {
     var series = runs.map(function (r, i) {
@@ -1817,8 +2002,18 @@ function openCompare(runs, label) {
       ? "Roughness along the trail, second by second, against distance covered."
       : "No usable GPS on these runs, so this is against time instead.";
 
-    $("cmpLegend").innerHTML = series.map(function (s2, i) {
-      return '<span><i style="background:' + s2.color + '"></i>Run ' + (i + 1) + ", " +
+    drawCompareMap(series);
+    series.forEach(function (s2) {
+      s2.name = "Run " + ((runNo && runNo[s2.ride.id]) || "");
+    });
+    $("cmpMapBtn").onclick = function () { openMapFor(series, label); };
+    $("cmpMapCap").textContent = byDistance
+      ? "The same tracks on top of each other. Thicker line means higher g at that point."
+      : "";
+
+    $("cmpLegend").innerHTML = series.map(function (s2) {
+      var n = (runNo && runNo[s2.ride.id]) || "";
+      return '<span><i style="background:' + s2.color + '"></i>Run ' + n + ", " +
              (dateLabel(s2.ride.startedAt).split(", ")[1] || "") + "</span>";
     }).join("");
 
@@ -1917,6 +2112,16 @@ function openRide(r) {
     toast("Could not open ride: " + (e && e.message ? e.message : e));
   }
 }
+
+$("detailMapBtn").onclick = function () {
+  if (!openR) return;
+  if (!openChunks && !openPts) { toast("Still reading the samples"); return; }
+  byRide("gps", openR.id).then(function (chunks) {
+    var pts = smooth3(buildCompareSeries(openR, chunks));
+    openMapFor([{ ride: openR, pts: pts, color: "#F4671F", name: "This run" }],
+               dateLabel(openR.startedAt));
+  });
+};
 
 function loadRide(r) {
   Promise.all([byRide("accel", r.id), byRide("gps", r.id)]).then(function (res) {
