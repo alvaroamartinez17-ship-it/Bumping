@@ -433,6 +433,7 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
     <p class="plotcap" id="cmpCap"></p>
     <div class="plot"><canvas id="cvCmpMap"></canvas></div>
     <p class="plotcap" id="cmpMapCap"></p>
+    <div class="subfacts" id="cmpDiag" style="padding:2px var(--pad) 0;color:var(--dust)"></div>
     <div class="btnrow"><button class="big" id="cmpMapBtn">Show on the aerial map</button></div>
     <div class="legend" id="cmpLegend"></div>
     <div class="rows" id="cmpRows"></div>
@@ -932,7 +933,7 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.27";
+var VERSION = "1.28";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
@@ -1947,7 +1948,9 @@ function openMapFor(series, title) {
     return;
   }
 
+  $("mapCap").textContent = "Loading the map library";
   ensureLeaflet().then(function (L) {
+    $("mapCap").textContent = "Library loaded, building the map";
     if (theMap) { theMap.remove(); theMap = null; }
     theMap = L.map("mapBox", {
       maxBounds: BW_BOUNDS, maxBoundsViscosity: 0.8,
@@ -1977,8 +1980,9 @@ function openMapFor(series, title) {
         prev = p;
       });
     });
+    $("mapCap").textContent = "Placed " + all.length + " positions, requesting imagery";
     if (all.length < 2) {
-      $("mapCap").textContent = "Not enough positions to place this run.";
+      $("mapCap").textContent = "Only " + all.length + " usable positions, cannot place this run.";
       return;
     }
     theMap.fitBounds(L.latLngBounds(all).pad(0.15));
@@ -1988,14 +1992,14 @@ function openMapFor(series, title) {
     /* If the imagery itself will not load, the track still draws on grey. Say which
        of the two failed rather than leaving it ambiguous. */
     var bad = 0, good = 0;
-    tiles.on("tileerror", function () {
-      bad++;
-      if (bad > 3 && !good) {
-        $("mapCap").textContent =
-          "Track drawn, but the aerial tiles were refused. The imagery URL needs adjusting.";
-      }
-    });
-    tiles.on("tileload", function () { good++; });
+    function status() {
+      $("mapCap").textContent = "Track drawn from " + all.length + " positions. " +
+        "Tiles: " + good + " loaded, " + bad + " refused." +
+        (good ? "" : bad > 2 ? " The imagery URL needs adjusting." : " Waiting.");
+    }
+    tiles.on("tileerror", function () { bad++; status(); });
+    tiles.on("tileload", function () { good++; status(); });
+    setTimeout(status, 2500);
   }).catch(function (e) {
     $("mapCap").textContent = "Imagery unavailable: " + (e && e.message ? e.message : e);
   });
@@ -2031,6 +2035,16 @@ function openCompare(runs, label, runNo) {
       : "No usable GPS on these runs, so this is against time instead.";
 
     drawCompareMap(series);
+
+    /* No console on the phone, so the numbers have to come out on screen. */
+    $("cmpDiag").textContent = series.map(function (s2, i) {
+      var n = s2.pts.length;
+      var fixed = s2.pts.filter(hasFix).length;
+      var span = n ? Math.round(s2.pts[n - 1].d) : 0;
+      return "r" + (i + 1) + ": " + (res[i] ? res[i].length : 0) + " chunks, " +
+             n + " s, " + fixed + " fixed, " + span + " m";
+    }).join("   ");
+
     series.forEach(function (s2) {
       s2.name = "Run " + ((runNo && runNo[s2.ride.id]) || "");
     });
