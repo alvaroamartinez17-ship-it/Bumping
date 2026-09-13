@@ -183,7 +183,22 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .legend{display:flex;flex-wrap:wrap;gap:6px 16px;padding:10px var(--pad) 0;font-size:12.5px}
 .legend span{display:flex;align-items:center;gap:6px;color:var(--dust)}
 .legend i{width:11px;height:3px;border-radius:2px;flex:0 0 auto}
-#mapBox{height:400px;margin:0;background:var(--panel);border-bottom:1px solid var(--rule)}
+#mapBox{background:var(--panel);border-bottom:1px solid var(--rule)}
+/* The map sheet does not scroll at all: dragging the map used to drag the page
+   under it, which made the whole app lurch about while panning. */
+.sheetbody.nofill{overflow:hidden;display:flex;flex-direction:column}
+.sheetbody.nofill #mapBox{flex:1;min-height:180px}
+.maptools{flex:0 0 auto;padding:9px var(--pad) calc(9px + env(safe-area-inset-bottom))}
+.maprow{display:flex;gap:9px}
+.maprow button{
+  flex:1;padding:11px;border:1px solid var(--rule);border-radius:3px;
+  background:var(--panel);font-size:14px;text-align:center;
+}
+#cmpMapBox{
+  height:270px;margin:18px var(--pad) 0;
+  background:var(--panel);border:1px solid var(--rule);border-radius:3px;
+  touch-action:none;overscroll-behavior:contain;
+}
 .leaflet-container{background:var(--panel)!important;font-family:-apple-system,sans-serif}
 .leaflet-control-attribution{font-size:10px}
 .ride .when{display:block;font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
@@ -410,15 +425,15 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
     <span class="t" id="mapTitle"></span>
     <span style="width:46px"></span>
   </div>
-  <div class="sheetbody">
+  <div class="sheetbody nofill">
     <div id="mapBox"></div>
-    <p class="plotcap" id="mapCap"></p>
-    <div class="legend" id="mapLegend"></div>
-    <div class="btnrow"><button class="big" id="mapNext">Try the next imagery source</button></div>
-    <div class="tip">
-      <p>Aerial imagery is only fetched when you are online, and only covers
-      Baden-Wuerttemberg. Line thickness is the g force at that point.</p>
-      <p>Imagery: LGL-BW, Datenlizenz Deutschland Namensnennung 2.0, www.lgl-bw.de</p>
+    <div class="maptools">
+      <p class="plotcap" id="mapCap" style="margin:0 0 6px"></p>
+      <div class="legend" id="mapLegend" style="padding:0 0 8px"></div>
+      <div class="maprow">
+        <button id="mapLayer">Streets</button>
+        <button id="mapNext">Next source</button>
+      </div>
     </div>
   </div>
 </div>
@@ -432,10 +447,17 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
   <div class="sheetbody">
     <div class="plot"><canvas id="cvCompare"></canvas></div>
     <p class="plotcap" id="cmpCap"></p>
-    <div class="plot"><canvas id="cvCmpMap"></canvas></div>
+    <div class="plot"><canvas id="cvCmpAlt"></canvas></div>
+    <p class="plotcap" id="cmpAltCap"></p>
+    <div class="subfacts" id="cmpRead" style="padding:8px var(--pad) 0;color:var(--cream)"></div>
+    <div id="cmpMapBox"></div>
+    <div class="maprow" style="padding:10px var(--pad) 0">
+      <button id="cmpColor">Colour by steepness</button>
+    </div>
+    <div class="plot" id="cmpMapPlot"><canvas id="cvCmpMap"></canvas></div>
     <p class="plotcap" id="cmpMapCap"></p>
     <div class="subfacts" id="cmpDiag" style="padding:2px var(--pad) 0;color:var(--dust)"></div>
-    <div class="btnrow"><button class="big" id="cmpMapBtn">Show on the aerial map</button></div>
+    <div class="btnrow"><button class="big" id="cmpMapBtn">Open the map full screen</button></div>
     <div class="legend" id="cmpLegend"></div>
     <div class="rows" id="cmpRows"></div>
     <div class="tip">
@@ -934,7 +956,7 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.29";
+var VERSION = "1.31";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
@@ -1792,7 +1814,13 @@ function buildCompareSeries(r, chunks) {
         last = q;
       }
     }
-    out.push({ d: d, r: rough[sec], lat: last ? last.lat : null, lon: last ? last.lon : null });
+    out.push({
+      d: d, r: rough[sec],
+      lat: last ? last.lat : null, lon: last ? last.lon : null,
+      alt: (last && last.alt !== null && last.alt !== undefined) ? last.alt : null,
+      spd: (last && last.spd !== null && last.spd !== undefined && last.spd >= 0)
+           ? last.spd * 3.6 : null
+    });
   }
   return out;
 }
@@ -1806,7 +1834,8 @@ function smooth3(vals) {
     var a = vals[Math.max(0, i - 1)].r, b = vals[i].r, c = vals[Math.min(vals.length - 1, i + 1)].r;
     out.push({
       d: vals[i].d, r: (a + b + c) / 3,
-      lat: vals[i].lat, lon: vals[i].lon
+      lat: vals[i].lat, lon: vals[i].lon,
+      alt: vals[i].alt, spd: vals[i].spd
     });
   }
   return out;
@@ -1816,6 +1845,75 @@ function hasFix(p) {
   return p && p.lat !== null && p.lat !== undefined &&
          p.lon !== null && p.lon !== undefined &&
          !isNaN(p.lat) && !isNaN(p.lon);
+}
+
+/* Steepness, as a percentage, worked out over a five point window so a single noisy
+   altitude reading cannot invent a cliff. */
+function gradeAt(pts, i) {
+  var a = Math.max(0, i - 2), b = Math.min(pts.length - 1, i + 2);
+  var dz = null, dx = pts[b].d - pts[a].d;
+  if (pts[a].alt !== null && pts[b].alt !== null) dz = pts[b].alt - pts[a].alt;
+  if (dz === null || dx < 3) return null;
+  return dz / dx * 100;
+}
+
+function gradeColor(g) {
+  var m = Math.min(Math.abs(g || 0), 25) / 25;
+  var a = [140, 128, 110], b = [220, 74, 61];
+  return "rgb(" + Math.round(a[0] + (b[0] - a[0]) * m) + "," +
+                  Math.round(a[1] + (b[1] - a[1]) * m) + "," +
+                  Math.round(a[2] + (b[2] - a[2]) * m) + ")";
+}
+
+/* The finger position, shared by both charts and the map. */
+var cmpState = { series: null, byDistance: false, maxX: 0, cursor: null, colorBy: "g" };
+
+function xOfPoint(s2, j) {
+  return cmpState.byDistance ? s2.pts[j].d : j;
+}
+
+function drawCursor(c, w, h) {
+  if (cmpState.cursor === null || !cmpState.maxX) return;
+  var x = (cmpState.cursor / cmpState.maxX) * w;
+  c.strokeStyle = "#F0E7D7"; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(x + .5, 0); c.lineTo(x + .5, h); c.stroke();
+}
+
+/* Elevation against the same axis as the roughness chart, so the finger lines up. */
+function drawAlt(series, byDistance) {
+  var f = fitCanvas($("cvCmpAlt"), 140);
+  if (!f) return;
+  var c = f.c, w = f.w, h = f.h, pad = 14, i, j;
+  c.clearRect(0, 0, w, h);
+  var lo = 1e9, hi = -1e9, maxX = 0, any = false;
+  series.forEach(function (s2) {
+    s2.pts.forEach(function (p, k) {
+      var x = byDistance ? p.d : k;
+      if (x > maxX) maxX = x;
+      if (p.alt === null) return;
+      any = true;
+      if (p.alt < lo) lo = p.alt;
+      if (p.alt > hi) hi = p.alt;
+    });
+  });
+  if (!any || !maxX) { emptyPlot(c, w, h, "No height data on these runs"); return; }
+  var span = Math.max(hi - lo, 5);
+  series.forEach(function (s2) {
+    c.strokeStyle = s2.color; c.lineWidth = 1.8; c.lineJoin = "round";
+    c.beginPath();
+    var started = false;
+    for (j = 0; j < s2.pts.length; j++) {
+      if (s2.pts[j].alt === null) continue;
+      var x = (xOfPoint(s2, j) / maxX) * w;
+      var y = h - pad - ((s2.pts[j].alt - lo) / span) * (h - pad * 2);
+      if (!started) { c.moveTo(x, y); started = true; } else c.lineTo(x, y);
+    }
+    c.stroke();
+  });
+  drawCursor(c, w, h);
+  c.fillStyle = "#998C79"; c.font = "11px -apple-system,sans-serif";
+  c.fillText(Math.round(hi) + " m", 5, 12);
+  c.fillText(Math.round(lo) + " m", 5, h - 5);
 }
 
 function drawCompare(series, byDistance) {
@@ -1831,6 +1929,7 @@ function drawCompare(series, byDistance) {
       if (p.r > maxY) maxY = p.r;
     });
   });
+  cmpState.maxX = maxX;
   if (!maxX || !maxY) { emptyPlot(c, w, h, "Not enough data to compare"); return; }
 
   c.strokeStyle = "#2E2720"; c.lineWidth = 1;
@@ -1850,12 +1949,72 @@ function drawCompare(series, byDistance) {
     c.stroke();
   });
 
+  drawCursor(c, w, h);
+
   c.fillStyle = "#998C79"; c.font = "11px -apple-system,sans-serif";
   c.fillText(maxY.toFixed(2) + " g", 5, 12);
   c.textAlign = "right";
   c.fillText(byDistance ? Math.round(maxX) + " m" : Math.round(maxX) + " s", w - 5, h - 4);
   c.textAlign = "left";
 }
+
+/* Dragging either chart moves a marker along every run on the map at the same point
+   of the trail, and prints what each run was doing there. */
+function nearestIndex(s2, x) {
+  var best = 0, bd = 1e12, j;
+  for (j = 0; j < s2.pts.length; j++) {
+    var v = Math.abs(xOfPoint(s2, j) - x);
+    if (v < bd) { bd = v; best = j; }
+  }
+  return best;
+}
+
+function setCursor(x) {
+  if (!cmpState.series) return;
+  cmpState.cursor = Math.max(0, Math.min(cmpState.maxX, x));
+  drawCompare(cmpState.series, cmpState.byDistance);
+  drawAlt(cmpState.series, cmpState.byDistance);
+
+  var txt = (cmpState.byDistance ? Math.round(cmpState.cursor) + " m in" : "at " +
+             Math.round(cmpState.cursor) + " s") + "  ";
+  cmpState.series.forEach(function (s2) {
+    var j = nearestIndex(s2, cmpState.cursor), p = s2.pts[j];
+    var g = gradeAt(s2.pts, j);
+    txt += "  " + (s2.name || "run") + " " + p.r.toFixed(2) + " g" +
+      (g === null ? "" : ", " + (g > 0 ? "+" : "") + g.toFixed(0) + "%") +
+      (p.spd === null ? "" : ", " + Math.round(p.spd) + " km/h");
+    var st = liveMaps["cmpMapBox"];
+    if (st && st.marks && st.marks[s2.idx] && hasFix(p)) {
+      st.marks[s2.idx].setLatLng([p.lat, p.lon]);
+    }
+  });
+  $("cmpRead").textContent = txt;
+}
+
+function attachScrub(canvasId) {
+  var cv = document.getElementById(canvasId);
+  if (!cv) return;
+  function at(e) {
+    var r = cv.getBoundingClientRect();
+    var cx = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX) - r.left;
+    setCursor(Math.max(0, Math.min(1, cx / r.width)) * cmpState.maxX);
+  }
+  function stop(e) { e.preventDefault(); at(e); }
+  cv.addEventListener("touchstart", stop, { passive: false });
+  cv.addEventListener("touchmove", stop, { passive: false });
+  cv.addEventListener("mousedown", function (e) {
+    at(e);
+    function mv(ev) { at(ev); }
+    function up() {
+      document.removeEventListener("mousemove", mv);
+      document.removeEventListener("mouseup", up);
+    }
+    document.addEventListener("mousemove", mv);
+    document.addEventListener("mouseup", up);
+  });
+}
+attachScrub("cvCompare");
+attachScrub("cvCmpAlt");
 
 /* The same tracks laid over each other. Colour identifies the run, line weight is the
    g force at that moment, so a rough section shows up as a thickening of every line
@@ -1913,30 +2072,30 @@ var LGL_BASE = "https://owsproxy.lgl-bw.de/owsproxy/ows/";
    turn, keeps the first that actually returns tiles, and remembers it. The last
    entry is a plain street map: not aerial, but it proves the map itself works. */
 var IMAGERY = [
-  { name: "LGL aerial, WMTS", kind: "tile",
-    url: LGL_BASE + "WMTS_LGL-BW_ATKIS_DOP_20_C?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0" +
-         "&LAYER=DOP_20_C&STYLE=default&TILEMATRIXSET=GoogleMapsCompatible" +
-         "&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png",
-    credit: "LGL-BW, dl-de/by-2.0" },
-  { name: "LGL aerial, WMTS prefixed", kind: "tile",
+  { name: "LGL aerial", kind: "tile",
     url: LGL_BASE + "WMTS_LGL-BW_ATKIS_DOP_20_C?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0" +
          "&LAYER=DOP_20_C&STYLE=default&TILEMATRIXSET=GoogleMapsCompatible" +
          "&TILEMATRIX=GoogleMapsCompatible%3A{z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png",
     credit: "LGL-BW, dl-de/by-2.0" },
-  { name: "LGL aerial, WMTS jpeg", kind: "tile",
+  { name: "Streets and paths", kind: "tile",
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    credit: "OpenStreetMap contributors" },
+  { name: "LGL aerial, plain z", kind: "tile",
     url: LGL_BASE + "WMTS_LGL-BW_ATKIS_DOP_20_C?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0" +
          "&LAYER=DOP_20_C&STYLE=default&TILEMATRIXSET=GoogleMapsCompatible" +
-         "&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/jpeg",
+         "&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png",
     credit: "LGL-BW, dl-de/by-2.0" },
-  { name: "LGL aerial, WMTS rest", kind: "tile",
+  { name: "LGL aerial, jpeg", kind: "tile",
+    url: LGL_BASE + "WMTS_LGL-BW_ATKIS_DOP_20_C?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0" +
+         "&LAYER=DOP_20_C&STYLE=default&TILEMATRIXSET=GoogleMapsCompatible" +
+         "&TILEMATRIX=GoogleMapsCompatible%3A{z}&TILEROW={y}&TILECOL={x}&FORMAT=image/jpeg",
+    credit: "LGL-BW, dl-de/by-2.0" },
+  { name: "LGL aerial, rest", kind: "tile",
     url: LGL_BASE + "WMTS_LGL-BW_ATKIS_DOP_20_C/DOP_20_C/default/GoogleMapsCompatible/{z}/{y}/{x}.png",
     credit: "LGL-BW, dl-de/by-2.0" },
   { name: "LGL aerial, WMS", kind: "wms",
     url: LGL_BASE + "WMS_LGL-BW_ATKIS_DOP_20_C",
-    layers: "DOP_20_C", credit: "LGL-BW, dl-de/by-2.0" },
-  { name: "Street map, not aerial", kind: "tile",
-    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-    credit: "OpenStreetMap contributors" }
+    layers: "DOP_20_C", credit: "LGL-BW, dl-de/by-2.0" }
 ];
 function imageryPref() {
   try { return parseInt(localStorage.getItem("bumplogImagery"), 10) || 0; } catch (e) { return 0; }
@@ -1946,7 +2105,7 @@ function setImageryPref(i) {
 }
 
 var BW_BOUNDS = [[47.40, 7.30], [49.90, 10.60]];
-var leafletReady = null, theMap = null, mapLayers = [];
+var leafletReady = null;
 
 function ensureLeaflet() {
   if (leafletReady) return leafletReady;
@@ -1965,116 +2124,153 @@ function ensureLeaflet() {
   return leafletReady;
 }
 
-function openMapFor(series, title) {
-  $("mapTitle").textContent = title;
-  $("mapCap").textContent = "";
-  if (theMap) { theMap.remove(); theMap = null; }
-  $("mapBox").innerHTML = "";
-  $("mapSheet").classList.add("on");
-  $("mapLegend").innerHTML = series.map(function (s2) {
-    return '<span><i style="background:' + s2.color + '"></i>' + s2.name + "</span>";
-  }).join("");
+var liveMaps = {};
 
-  var any = series.some(function (s2) {
-    return s2.pts.some(hasFix);
-  });
-  if (!any) { $("mapCap").textContent = "No GPS on this run, so there is nothing to place."; return; }
-  if (navigator.onLine === false) {
-    $("mapCap").textContent = "Offline. Connect to wifi and open this again for the imagery.";
-    return;
-  }
+function disposeMap(boxId) {
+  var st = liveMaps[boxId];
+  if (st && st.map) { try { st.map.remove(); } catch (e) { /* already gone */ } }
+  liveMaps[boxId] = null;
+  var box = document.getElementById(boxId);
+  if (box) box.innerHTML = "";
+}
 
-  $("mapCap").textContent = "Loading the map library";
+/* One renderer for both the strip on the compare page and the full screen sheet. */
+function renderMap(boxId, capId, series, withControls) {
+  var cap = capId ? $(capId) : null;
+  function say(t) { if (cap) cap.textContent = t; }
+
+  var any = series.some(function (s2) { return s2.pts.some(hasFix); });
+  if (!any) { say("No GPS on these runs, so there is nothing to place."); return; }
+  if (navigator.onLine === false) { say("Offline. The map needs wifi."); return; }
+
+  disposeMap(boxId);
+  say("Loading the map");
+
   ensureLeaflet().then(function (L) {
-    $("mapCap").textContent = "Library loaded, building the map";
-    if (theMap) { theMap.remove(); theMap = null; }
-    theMap = L.map("mapBox", {
+    var map = L.map(boxId, {
       maxBounds: BW_BOUNDS, maxBoundsViscosity: 0.8,
       minZoom: 10, maxZoom: 19, zoomControl: true, attributionControl: true
     });
-    var layer = null, trying = imageryPref(), giveUp = false;
+    liveMaps[boxId] = { map: map, layer: null, idx: imageryPref() };
+
+    var maxR = 0, all = [], segs = [], marks = [];
+    series.forEach(function (s2) {
+      s2.pts.forEach(function (p) { if (p.r > maxR) maxR = p.r; });
+    });
+    series.forEach(function (s2, si) {
+      s2.idx = si;
+      var prev = null, prevJ = -1;
+      s2.pts.forEach(function (p, j) {
+        if (!hasFix(p)) return;
+        if (prev) {
+          var line = L.polyline([[prev.lat, prev.lon], [p.lat, p.lon]], {
+            color: s2.color, weight: 2 + (maxR ? p.r / maxR : 0) * 7, opacity: 0.85
+          }).addTo(map);
+          segs.push({ line: line, runColor: s2.color, grade: gradeAt(s2.pts, j) });
+        }
+        all.push([p.lat, p.lon]);
+        prev = p; prevJ = j;
+      });
+      var first = null, k;
+      for (k = 0; k < s2.pts.length; k++) { if (hasFix(s2.pts[k])) { first = s2.pts[k]; break; } }
+      if (first) {
+        marks.push(L.circleMarker([first.lat, first.lon], {
+          radius: 7, color: "#F0E7D7", weight: 2, fillColor: s2.color, fillOpacity: 1
+        }).addTo(map));
+      } else {
+        marks.push(null);
+      }
+    });
+    liveMaps[boxId].segs = segs;
+    liveMaps[boxId].marks = marks;
+    if (all.length < 2) { say("Only " + all.length + " usable positions."); return; }
+    map.fitBounds(L.latLngBounds(all).pad(0.15));
+    setTimeout(function () { map.invalidateSize(); }, 80);
 
     function makeLayer(spec) {
-      var opts = { maxZoom: 19, minZoom: 10, bounds: BW_BOUNDS, attribution: spec.credit };
       if (spec.kind === "wms") {
         return L.tileLayer.wms(spec.url, {
           layers: spec.layers, format: "image/png", transparent: false,
           maxZoom: 19, minZoom: 10, attribution: spec.credit
         });
       }
-      return L.tileLayer(spec.url, opts);
+      return L.tileLayer(spec.url, {
+        maxZoom: 19, minZoom: 10, bounds: BW_BOUNDS, attribution: spec.credit
+      });
     }
 
-    function trySource(i) {
-      if (i >= IMAGERY.length) {
-        giveUp = true;
-        $("mapCap").textContent = "Track drawn. No imagery source would load.";
-        return;
-      }
-      trying = i;
-      var spec = IMAGERY[i];
-      if (layer) { theMap.removeLayer(layer); layer = null; }
-      var good = 0, bad = 0, settled = false;
-      layer = makeLayer(spec);
-      layer.on("tileload", function () {
+    /* Try each source until one returns a tile. Six seconds, because four was not
+       always enough on a phone and the ladder gave up before the good one. */
+    function trySource(i, depth) {
+      var st = liveMaps[boxId];
+      if (!st || st.map !== map) return;
+      if (depth > IMAGERY.length) { say("Track drawn. No imagery would load."); return; }
+      i = ((i % IMAGERY.length) + IMAGERY.length) % IMAGERY.length;
+      st.idx = i;
+      var spec = IMAGERY[i], good = 0, settled = false;
+      if (st.layer) { map.removeLayer(st.layer); }
+      st.layer = makeLayer(spec);
+      st.layer.on("tileload", function () {
         good++;
         if (!settled) {
           settled = true;
           setImageryPref(i);
-          $("mapCap").textContent = "Imagery: " + spec.name + ". Thicker line means higher g.";
+          say(spec.name + ". Thicker line means higher g.");
+          if (withControls) $("mapLayer").textContent =
+            spec.name.indexOf("aerial") >= 0 ? "Streets" : "Aerial";
         }
       });
-      layer.on("tileerror", function () { bad++; });
-      layer.addTo(theMap);
-      $("mapCap").textContent = "Trying " + spec.name;
+      st.layer.addTo(map);
+      say("Trying " + spec.name);
       setTimeout(function () {
-        if (settled || giveUp) return;
-        if (good === 0) trySource(i + 1);
-      }, 4000);
+        var now = liveMaps[boxId];
+        if (!now || now.map !== map || settled) return;
+        if (good === 0) trySource(i + 1, depth + 1);
+      }, 6000);
     }
-    $("mapNext").onclick = function () {
-      if (!theMap) return;
-      giveUp = false;
-      trySource((trying + 1) % IMAGERY.length);
-    };
+    trySource(imageryPref(), 0);
 
-    var maxR = 0, all = [];
-    series.forEach(function (s2) {
-      s2.pts.forEach(function (p) { if (p.r > maxR) maxR = p.r; });
-    });
-    series.forEach(function (s2) {
-      var prev = null;
-      s2.pts.forEach(function (p) {
-        if (!hasFix(p)) return;
-        if (prev) {
-          L.polyline([[prev.lat, prev.lon], [p.lat, p.lon]], {
-            color: s2.color,
-            weight: 2 + (maxR ? p.r / maxR : 0) * 7,
-            opacity: 0.85
-          }).addTo(theMap);
-        }
-        all.push([p.lat, p.lon]);
-        prev = p;
-      });
-    });
-    if (all.length < 2) {
-      $("mapCap").textContent = "Only " + all.length + " usable positions, cannot place this run.";
-      return;
+    if (withControls) {
+      $("mapNext").onclick = function () {
+        var st = liveMaps[boxId];
+        if (st) trySource(st.idx + 1, 0);
+      };
+      $("mapLayer").onclick = function () {
+        var st = liveMaps[boxId];
+        if (!st) return;
+        /* index 1 is the street map, everything else is aerial */
+        trySource(IMAGERY[st.idx].name.indexOf("aerial") >= 0 ? 1 : 0, 0);
+      };
     }
-    theMap.fitBounds(L.latLngBounds(all).pad(0.15));
-    setTimeout(function () { theMap.invalidateSize(); }, 60);
-    trySource(trying);
-    $("mapCap").textContent = "Thicker line means higher g. Pinch or use the buttons to zoom.";
-
-    /* If the imagery itself will not load, the track still draws on grey. Say which
-       of the two failed rather than leaving it ambiguous. */
   }).catch(function (e) {
-    $("mapCap").textContent = "Imagery unavailable: " + (e && e.message ? e.message : e);
+    say("Map unavailable: " + (e && e.message ? e.message : e));
   });
 }
+
+function recolourMap(boxId) {
+  var st = liveMaps[boxId];
+  if (!st || !st.segs) return;
+  st.segs.forEach(function (sg) {
+    sg.line.setStyle({
+      color: cmpState.colorBy === "grade"
+        ? (sg.grade === null ? "#8A7F6E" : gradeColor(sg.grade))
+        : sg.runColor
+    });
+  });
+}
+
+function openMapFor(series, title) {
+  $("mapTitle").textContent = title;
+  $("mapLegend").innerHTML = series.map(function (s2) {
+    return '<span><i style="background:' + s2.color + '"></i>' + (s2.name || "") + "</span>";
+  }).join("");
+  $("mapSheet").classList.add("on");
+  setTimeout(function () { renderMap("mapBox", "mapCap", series, true); }, 30);
+}
+
 $("mapBack").onclick = function () {
   $("mapSheet").classList.remove("on");
-  if (theMap) { theMap.remove(); theMap = null; }
+  disposeMap("mapBox");
 };
 
 function openCompare(runs, label, runNo) {
@@ -2083,6 +2279,7 @@ function openCompare(runs, label, runNo) {
   $("cmpRows").innerHTML = "";
   $("cmpCap").textContent = "Reading the runs";
   $("cmpMapCap").textContent = "";
+  disposeMap("cmpMapBox");
   $("cmpSheet").classList.add("on");
   Promise.all(runs.map(function (r) { return byRide("gps", r.id); })).then(function (res) {
     var series = runs.map(function (r, i) {
@@ -2097,12 +2294,31 @@ function openCompare(runs, label, runNo) {
     var far = 0;
     series.forEach(function (s2) { far = Math.max(far, s2.pts[s2.pts.length - 1].d); });
     var byDistance = far > 50;
+    cmpState.series = series;
+    cmpState.byDistance = byDistance;
+    cmpState.cursor = null;
     drawCompare(series, byDistance);
+    drawAlt(series, byDistance);
+    $("cmpAltCap").textContent =
+      "Height along the same axis. Drag either chart to move the marker on the map.";
+    $("cmpRead").textContent = "";
     $("cmpCap").textContent = byDistance
       ? "Roughness along the trail, second by second, against distance covered."
       : "No usable GPS on these runs, so this is against time instead.";
 
     drawCompareMap(series);
+    series.forEach(function (s2) {
+      s2.name = "Run " + ((runNo && runNo[s2.ride.id]) || "");
+    });
+    if (navigator.onLine !== false) {
+      $("cmpMapPlot").style.display = "none";
+      $("cmpMapBox").style.display = "block";
+      // the sheet has to be laid out before Leaflet measures the box
+      setTimeout(function () { renderMap("cmpMapBox", "cmpMapCap", series, false); }, 40);
+    } else {
+      $("cmpMapPlot").style.display = "block";
+      $("cmpMapBox").style.display = "none";
+    }
 
     /* No console on the phone, so the numbers have to come out on screen. */
     $("cmpDiag").textContent = series.map(function (s2, i) {
@@ -2113,9 +2329,12 @@ function openCompare(runs, label, runNo) {
              n + " s, " + fixed + " fixed, " + span + " m";
     }).join("   ");
 
-    series.forEach(function (s2) {
-      s2.name = "Run " + ((runNo && runNo[s2.ride.id]) || "");
-    });
+    $("cmpColor").onclick = function () {
+      cmpState.colorBy = cmpState.colorBy === "g" ? "grade" : "g";
+      $("cmpColor").textContent =
+        cmpState.colorBy === "g" ? "Colour by steepness" : "Colour by g force";
+      recolourMap("cmpMapBox");
+    };
     $("cmpMapBtn").onclick = function () { openMapFor(series, label); };
     $("cmpMapCap").textContent = byDistance
       ? "The same tracks on top of each other. Thicker line means higher g at that point."
@@ -2146,7 +2365,10 @@ function openCompare(runs, label, runNo) {
     $("cmpCap").textContent = "Could not read those runs: " + (e && e.message ? e.message : e);
   });
 }
-$("cmpBack").onclick = function () { $("cmpSheet").classList.remove("on"); };
+$("cmpBack").onclick = function () {
+  $("cmpSheet").classList.remove("on");
+  disposeMap("cmpMapBox");
+};
 
 /* ------------------------------------------------------------- detail */
 var openR = null, openPts = null, openChunks = null, openJumps = null, openRough = null;
