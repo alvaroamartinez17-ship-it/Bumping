@@ -52,6 +52,35 @@ Tap any row on the Rides tab. Three charts, all drawn from the samples on the ph
 
 No map tiles are fetched, so all of this works with no signal.
 
+## Comparing runs at the same trail
+
+When a trail holds more than one run, its header gets a **Compare** button. That draws every
+run's roughness on one chart and lists their figures side by side: roughness while moving,
+hardest hit, vertical and sideways split, top speed, distance, descent, riding time, stops.
+
+The chart plots roughness against **distance covered**, not against time. With time on the
+axis, a run that included a stop has its whole trace squashed: in a test where two riders
+took the same 600 m trail and one stopped to move a rock, the same rock garden drew 8
+percent of the chart wide on one run and 3 percent on the other. Against distance both drew
+it at 43 to 52 percent. Where two lines rise together, that is the same section of trail.
+
+If none of the runs has usable GPS the chart falls back to time and says so.
+
+## Riding time
+
+A run usually includes time spent stopped at the top or sorting yourself out at the bottom,
+and those seconds read close to zero roughness, which drags the average down. One real run
+spent 64 of its 164 seconds stationary.
+
+So the ride detail reports **roughness while actually moving**, measured only from the
+samples taken above 5 km/h, alongside how much of the run that was. Use that figure when
+comparing runs. Both go into the exports as `roughness_moving_g` and `moving_time_s`.
+
+Descent is measured the same way. GPS altitude wandered 491 to 464 to 453 to 469 to 443 m
+across 64 stationary seconds on one run, and the old filter banked 34 m of that as real
+descent, reporting 82 m where the hill was about 50. Height now only accumulates while
+moving.
+
 ## Surface
 
 Roughness separates surfaces cleanly. From a day of real rides on this phone:
@@ -73,11 +102,11 @@ very smooth street run, so **it does not currently tell you whether the phone is
 mounted**. Treat it as raw information until there is data from a known rigid mount to
 calibrate it against.
 
-The detail also reports the share of readings **at the sensor ceiling**. Three separate
-rides on one day peaked at 9.64, 9.65 and 9.65 g, which is a hard ceiling rather than a
-coincidence, so the accelerometer saturates around there. Once a hit clips, its recorded
-force is a floor rather than a measurement, and landing forces from that ride are
-unreliable. The street rides only reached 3.3 g and never touched it.
+The detail reports the share of readings **over 9 g**, which is simply a count of very hard
+hits. An earlier version called this sensor saturation, on the evidence of three rides that
+all peaked at 9.64 to 9.65 g. A later day reached 12.14 g, so there is no ceiling anywhere
+near there and that conclusion was wrong. Typically 0.2 percent of samples exceed 9 g on a
+rough descent.
 
 ## Airtime
 
@@ -112,18 +141,18 @@ the order they occurred, so Session 1 is the first day you ever recorded.
 Within a session the runs are grouped by **where they happened**, which is what makes two
 runs comparable. Each ride gets an anchor: the median latitude and longitude of its usable
 fixes, median rather than mean so a stray tower fix cannot drag it across the valley. Rides
-whose anchors fall within 500 m of each other become a **spot**, numbered in the order they
-first occurred, and the runs inside a spot are numbered Run 1, Run 2 and so on.
+whose anchors fall within 500 m of each other become a **trail**, numbered in the order they
+first occurred, and the runs inside a trail are numbered Run 1, Run 2 and so on.
 
-The spot header shows how many runs it holds, their mean roughness and their mean fix
+The trail header shows how many runs it holds, their mean roughness and their mean fix
 accuracy, so repeated runs of the same trail read against each other directly. Rides with no
 usable position land in **Location unknown** at the end.
 
 500 m was chosen against a real day of thirteen rides: it merges two runs whose centres sat
-362 m apart and keeps a trail run separate from a street run 900 m away. `SPOT_RADIUS` at the
+362 m apart and keeps a trail run separate from a street run 900 m away. `TRAIL_RADIUS` at the
 top of the script changes it.
 
-The day export carries `# session,N` plus `spot`, `anchor_lat` and `anchor_lon` per ride.
+The day export carries `# session,N` plus `trail`, `anchor_lat` and `anchor_lon` per ride.
 
 ## GPS accuracy gates
 
@@ -175,6 +204,21 @@ error at all. The app now handles that itself:
 
 Setup shows how long ago the last fix arrived and how many restarts have happened. A ride
 that needed restarts records the count, shown on its detail screen.
+
+## Runs that never started
+
+Starting the recording and then not setting off for a while is easy to do. A run is thrown
+away rather than saved when it covered under 30 m, spent under 5 s moving, **and** its
+roughness is below 0.15 g. All three have to be true: a real descent with dead GPS reports
+no distance and no moving time, but it is never that quiet, so it is kept.
+
+The app says what happened rather than saving it silently.
+
+## Stops during a run
+
+Stretches below 3 km/h lasting 5 s or more are counted as stops. They are kept out of the
+roughness figure and the descent count, and the ride detail reports how many there were and
+how long they lasted. Moving a rock out of the trail no longer flattens the run's numbers.
 
 ## Deleting rides
 

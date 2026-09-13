@@ -174,6 +174,10 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   display:flex;justify-content:space-between;gap:12px;
 }
 .sub b{color:var(--cream);font-weight:600}
+.sub button{color:var(--orange);font-size:12.5px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;padding:10px var(--pad) 0;font-size:12.5px}
+.legend span{display:flex;align-items:center;gap:6px;color:var(--dust)}
+.legend i{width:11px;height:3px;border-radius:2px;flex:0 0 auto}
 .ride .when{display:block;font-size:15px;font-weight:600}
 .ride .facts{display:block;font-size:12.5px;color:var(--dust);font-variant-numeric:tabular-nums;margin-top:3px}
 .ride .facts i{font-style:normal;color:var(--rule);padding:0 7px}
@@ -381,6 +385,25 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
       <button class="act" data-x="gpx">GPX track<span class="hint">for maps</span></button>
       <button class="act" data-x="summary">Summary JSON<span class="hint" id="hSum"></span></button>
       <button class="act" data-x="json">Everything as JSON<span class="hint">raw</span></button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet" id="cmpSheet">
+  <div class="sheetbar">
+    <button id="cmpBack">Back</button>
+    <span class="t" id="cmpTitle"></span>
+    <span style="width:46px"></span>
+  </div>
+  <div class="sheetbody">
+    <div class="plot"><canvas id="cvCompare"></canvas></div>
+    <p class="plotcap" id="cmpCap"></p>
+    <div class="legend" id="cmpLegend"></div>
+    <div class="rows" id="cmpRows"></div>
+    <div class="tip">
+      <p>Runs are lined up by how far along the trail you were, not by the clock, so a
+      faster run does not simply look shifted. Where two lines rise together you have
+      found the same rough section twice.</p>
     </div>
   </div>
 </div>
@@ -627,7 +650,9 @@ var R = {
   ema: 1,                               // smoothed |a| in g, for the high-pass
   sumSq: 0, nSq: 0, peak: 0,
   secBucketSq: 0, secBucketN: 0, secIdx: 0, rough: [],
-  vSum: 0, lSum: 0, vlN: 0,             // vertical and lateral energy, split by gravity
+  vSum: 0, lSum: 0, vlN: 0,
+  movSq: 0, movN: 0,
+  stillRun: 0, pauses: 0, pausedSec: 0,             // vertical and lateral energy, split by gravity
   maxTurn: 0, turnNow: 0,
   air: null,
   gpsDrops: 0,
@@ -647,7 +672,8 @@ function resetRecorder() {
   R.accSum = 0; R.movePt = null; R.moveT = 0; R.preDrop = 0; R.seeded = false;
   R.coarse = 0; R.fixT = [];
   R.ema = 1; R.sumSq = 0; R.nSq = 0; R.peak = 0;
-  R.vSum = 0; R.lSum = 0; R.vlN = 0; R.maxTurn = 0; R.turnNow = 0;
+  R.vSum = 0; R.lSum = 0; R.vlN = 0; R.movSq = 0; R.movN = 0;
+  R.stillRun = 0; R.pauses = 0; R.pausedSec = 0; R.maxTurn = 0; R.turnNow = 0;
   R.air = makeAirDetector();
   R.gpsDrops = 0;
   R.clip = 0; R.rawPeak = 0;
@@ -718,6 +744,7 @@ function onMotion(e) {
   R.ringI = (R.ringI + 1) % R.ring.length;
 
   if (R.on) {
+    if (R.spd > 5) { R.movSq += hp * hp; R.movN++; }
     if (mag > 9) R.clip++;          // near the sensor ceiling; readings above this lie
     if (mag > R.rawPeak) R.rawPeak = mag;
     if (R.air) R.air.push(t, mag);
@@ -753,6 +780,17 @@ function onFix(pos) {
     hdg: c.heading === null ? null : c.heading
   };
   R.spd = p.spd !== null && p.spd >= 0 ? p.spd * 3.6 : R.spd;
+
+  /* Stopping mid-trail to shift a rock is a pause, not part of the descent. Track
+     stretches below walking pace so they can be counted and kept out of the numbers. */
+  if (R.on) {
+    if (R.spd < 3) {
+      R.stillRun++;
+    } else {
+      if (R.stillRun >= 5) { R.pauses++; R.pausedSec += R.stillRun; }
+      R.stillRun = 0;
+    }
+  }
   if (R.spd > R.maxSpd) R.maxSpd = R.spd;
 
   if (!R.on) { R.lastFix = p; return; }
@@ -814,7 +852,10 @@ function onFix(pos) {
      descent. Take fixes only when the horizontal fix is decent, run a 5 point
      median, and require 2.5 m of movement before believing it. Window and threshold
      were fitted against a real run whose true net drop was known. */
-  if (!coarse && p.alt !== null && c.accuracy <= GPS_SEED_ACC &&
+  /* Standing at the top of a trail, GPS altitude wandered 491 -> 464 -> 453 -> 469 -> 443
+     over 64 stationary seconds and the filter banked 34 m of it as descent. Altitude only
+     counts while actually moving. */
+  if (!coarse && R.spd > 5 && p.alt !== null && c.accuracy <= GPS_SEED_ACC &&
       (p.altAcc === null || p.altAcc === undefined || p.altAcc <= 40)) {
     R.altWin.push(p.alt);
     if (R.altWin.length > 3) R.altWin.shift();
@@ -855,7 +896,7 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.19";
+var VERSION = "1.22";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
@@ -1067,6 +1108,10 @@ function stop() {
     drop: Math.round(R.drop),
     maxSpd: Math.round(R.maxSpd * 10) / 10,
     rms: R.nSq ? Math.round(Math.sqrt(R.sumSq / R.nSq) * 1000) / 1000 : 0,
+    movRms: R.movN ? Math.round(Math.sqrt(R.movSq / R.movN) * 1000) / 1000 : null,
+    movSec: (R.movN && R.nA) ? Math.round(R.movN / R.nA * (Date.now() - R.t0) / 1000) : 0,
+    pauses: R.pauses,
+    pausedSec: R.pausedSec,
     peak: Math.round(R.peak * 100) / 100,
     hz: R.nA && R.t0 ? Math.round(R.nA / ((Date.now() - R.t0) / 1000)) : 0,
     vRms: R.vlN ? Math.round(Math.sqrt(R.vSum / R.vlN) * 1000) / 1000 : null,
@@ -1088,6 +1133,22 @@ function stop() {
     gaps: R.gaps,
     rough: R.rough
   };
+  /* Sometimes the recording starts before the ride does. Throw those away rather than
+     filling the list with them. The roughness guard is the safety net: a genuine run with
+     dead GPS reports no distance and no moving time, but it is never this quiet. */
+  var wentNowhere = (ride.dist || 0) < 30 && (ride.movSec || 0) < 5;
+  var nothingHappened = (ride.rms || 0) < 0.15;
+  if (wentNowhere && nothingHappened) {
+    delRide(ride.id).then(function () {
+      $("btnRec").classList.remove("stop");
+      $("recLabel").textContent = "Start recording";
+      $("clock").classList.add("idle");
+      toast("Nothing moved in that " + hms(ride.dur) + ", so it was not kept.");
+      updateStorage();
+    });
+    return;
+  }
+
   put("rides", ride).then(function () {
     $("btnRec").classList.remove("stop");
     $("recLabel").textContent = "Start recording";
@@ -1095,7 +1156,7 @@ function stop() {
     if (ride.nGps === 0) {
       toast("Saved, but no GPS fix arrived at all. Check the GPS chip before the next run.");
     } else if (ride.gpsStuck || ride.dist === 0) {
-      toast("Saved. GPS reported the same spot throughout, which happens indoors or with no sky view.");
+      toast("Saved. GPS never moved throughout, which happens indoors or with no sky view.");
     } else {
       toast("Saved " + hms(ride.dur) + " with " + ride.nAccel.toLocaleString() + " samples");
     }
@@ -1467,12 +1528,13 @@ function accBand(r) {
   return { k: 3, label: "No satellite lock", note: "position unusable" };
 }
 
-/* Two runs belong together if they happened in the same place. The anchor is the
-   median of a ride's usable fixes rather than the mean, so one stray tower fix cannot
-   drag it across the valley. The 500 m radius was chosen against a real day: it merges
-   two runs whose centres sat 362 m apart and keeps a trail run separate from a street
-   run 900 m away. */
-var SPOT_RADIUS = 500;
+/* A session is a calendar day, a trail is a place, a run is one descent of it. Two
+   runs belong to the same trail if their anchors sit within the radius. The anchor is
+   the median of a run's usable fixes rather than the mean, so one stray tower fix
+   cannot drag it across the valley. 500 m was chosen against a real day: it merges two
+   runs whose centres sat 362 m apart and keeps a trail separate from a street ride
+   900 m away. */
+var TRAIL_RADIUS = 500;
 
 /* Gaps between fixes, in seconds. The median says what the receiver managed on
    average, the worst gap says whether it stalled. */
@@ -1518,24 +1580,24 @@ function ensureGeo(list) {
 
 function hasAnchor(r) { return r.anchorLat !== null && r.anchorLat !== undefined; }
 
-/* Single linkage: a ride joins a spot if it is within the radius of any run already in
-   it, which lets a spot stretch along a valley without swallowing the next one. */
+/* Single linkage: a run joins a trail if it is within the radius of any run already in
+   it, which lets a trail stretch along a valley without swallowing the next one. */
 function clusterByPlace(list) {
-  var spots = [], unplaced = [];
+  var trails = [], unplaced = [];
   list.forEach(function (r) {
     if (!hasAnchor(r)) { unplaced.push(r); return; }
     var me = { lat: r.anchorLat, lon: r.anchorLon }, hit = null, i, j;
-    for (i = 0; i < spots.length && !hit; i++) {
-      for (j = 0; j < spots[i].length; j++) {
-        var o = spots[i][j];
-        if (haversine(me, { lat: o.anchorLat, lon: o.anchorLon }) <= SPOT_RADIUS) {
-          hit = spots[i]; break;
+    for (i = 0; i < trails.length && !hit; i++) {
+      for (j = 0; j < trails[i].length; j++) {
+        var o = trails[i][j];
+        if (haversine(me, { lat: o.anchorLat, lon: o.anchorLon }) <= TRAIL_RADIUS) {
+          hit = trails[i]; break;
         }
       }
     }
-    if (hit) hit.push(r); else spots.push([r]);
+    if (hit) hit.push(r); else trails.push([r]);
   });
-  return { spots: spots, unplaced: unplaced };
+  return { trails: trails, unplaced: unplaced };
 }
 
 function sessionNumbers() {
@@ -1612,7 +1674,7 @@ function renderRides() {
       var asc = group.slice().sort(function (a, b) { return a.startedAt - b.startedAt; });
       var res = clusterByPlace(asc);
 
-      res.spots.forEach(function (runs, idx) {
+      res.trails.forEach(function (runs, idx) {
         var rms = 0, acc = 0, accN = 0;
         runs.forEach(function (r) {
           rms += r.rms || 0;
@@ -1621,11 +1683,19 @@ function renderRides() {
         var sub = document.createElement("li");
         sub.className = "sub";
         sub.innerHTML =
-          "<span>Spot " + (idx + 1) + ", " + runs[0].anchorLat.toFixed(4) + " " +
+          "<span>Trail " + (idx + 1) + ", " + runs[0].anchorLat.toFixed(4) + " " +
           runs[0].anchorLon.toFixed(4) + "</span>" +
           "<span>" + runs.length + (runs.length === 1 ? " run" : " runs") +
           ", mean <b>" + (rms / runs.length).toFixed(2) + " g</b>" +
           (accN ? ", fixes " + Math.round(acc / accN) + " m" : "") + "</span>";
+        if (runs.length > 1) {
+          var cmp = document.createElement("button");
+          cmp.textContent = "Compare";
+          cmp.onclick = function () {
+            openCompare(runs, runs.length + " runs on trail " + (idx + 1));
+          };
+          sub.appendChild(cmp);
+        }
         ul.appendChild(sub);
         runs.forEach(function (r, k2) { rideRow(r, ul, "Run " + (k2 + 1)); });
       });
@@ -1647,6 +1717,131 @@ function renderRides() {
       (totS / 1000).toFixed(0) + "k samples";
   });
 }
+
+/* ------------------------------------------------------ comparing runs */
+var CMP_COLORS = ["#F4671F", "#E8C25A", "#7BC28C", "#F0E7D7", "#9A8D7A", "#DC4A3D"];
+
+/* Two runs of the same trail only line up if you plot against distance travelled.
+   Against time, the faster run is squashed and the rough sections never coincide. */
+function buildCompareSeries(r, chunks) {
+  var pts = [];
+  chunks.sort(bySeq).forEach(function (ch) { pts = pts.concat(ch.p || []); });
+  pts.sort(function (a, b) { return a.t - b.t; });
+  var rough = r.rough || [], out = [], d = 0, last = null, gi = 0, sec;
+  for (sec = 0; sec < rough.length; sec++) {
+    var t = sec * 1000;
+    while (gi < pts.length && pts[gi].t <= t + 500) {
+      var q = pts[gi++];
+      if (q.acc === null || q.acc === undefined || q.acc <= GPS_USE_ACC) {
+        if (last) {
+          var step = haversine(last, q);
+          if (step > 0.5 && step < 200) d += step;
+        }
+        last = q;
+      }
+    }
+    out.push({ d: d, r: rough[sec] });
+  }
+  return out;
+}
+
+function smooth3(vals) {
+  var out = [], i;
+  for (i = 0; i < vals.length; i++) {
+    var a = vals[Math.max(0, i - 1)].r, b = vals[i].r, c = vals[Math.min(vals.length - 1, i + 1)].r;
+    out.push({ d: vals[i].d, r: (a + b + c) / 3 });
+  }
+  return out;
+}
+
+function drawCompare(series, byDistance) {
+  var f = fitCanvas($("cvCompare"), 200);
+  if (!f) return;
+  var c = f.c, w = f.w, h = f.h, pad = 16, i, j;
+  c.clearRect(0, 0, w, h);
+  var maxX = 0, maxY = 0;
+  series.forEach(function (s2) {
+    s2.pts.forEach(function (p, k) {
+      var x = byDistance ? p.d : k;
+      if (x > maxX) maxX = x;
+      if (p.r > maxY) maxY = p.r;
+    });
+  });
+  if (!maxX || !maxY) { emptyPlot(c, w, h, "Not enough data to compare"); return; }
+
+  c.strokeStyle = "#2E2720"; c.lineWidth = 1;
+  for (i = 1; i <= 3; i++) {
+    var gy = pad + (h - pad * 2) * i / 4;
+    c.beginPath(); c.moveTo(0, gy + .5); c.lineTo(w, gy + .5); c.stroke();
+  }
+
+  series.forEach(function (s2) {
+    c.strokeStyle = s2.color; c.lineWidth = 1.8; c.lineJoin = "round";
+    c.beginPath();
+    for (j = 0; j < s2.pts.length; j++) {
+      var x = (byDistance ? s2.pts[j].d : j) / maxX * w;
+      var y = h - pad - (s2.pts[j].r / maxY) * (h - pad * 2);
+      if (j === 0) c.moveTo(x, y); else c.lineTo(x, y);
+    }
+    c.stroke();
+  });
+
+  c.fillStyle = "#998C79"; c.font = "11px -apple-system,sans-serif";
+  c.fillText(maxY.toFixed(2) + " g", 5, 12);
+  c.textAlign = "right";
+  c.fillText(byDistance ? Math.round(maxX) + " m" : Math.round(maxX) + " s", w - 5, h - 4);
+  c.textAlign = "left";
+}
+
+function openCompare(runs, label) {
+  $("cmpTitle").textContent = label;
+  $("cmpLegend").innerHTML = "";
+  $("cmpRows").innerHTML = "";
+  $("cmpCap").textContent = "Reading the runs";
+  $("cmpSheet").classList.add("on");
+  Promise.all(runs.map(function (r) { return byRide("gps", r.id); })).then(function (res) {
+    var series = runs.map(function (r, i) {
+      return {
+        ride: r,
+        pts: smooth3(buildCompareSeries(r, res[i])),
+        color: CMP_COLORS[i % CMP_COLORS.length]
+      };
+    }).filter(function (s2) { return s2.pts.length > 2; });
+
+    if (!series.length) { $("cmpCap").textContent = "These runs have no roughness data."; return; }
+    var far = 0;
+    series.forEach(function (s2) { far = Math.max(far, s2.pts[s2.pts.length - 1].d); });
+    var byDistance = far > 50;
+    drawCompare(series, byDistance);
+    $("cmpCap").textContent = byDistance
+      ? "Roughness along the trail, second by second, against distance covered."
+      : "No usable GPS on these runs, so this is against time instead.";
+
+    $("cmpLegend").innerHTML = series.map(function (s2, i) {
+      return '<span><i style="background:' + s2.color + '"></i>Run ' + (i + 1) + ", " +
+             (dateLabel(s2.ride.startedAt).split(", ")[1] || "") + "</span>";
+    }).join("");
+
+    var rowsHtml = "";
+    function line(name, pick) {
+      rowsHtml += '<div class="row"><span>' + name + '</span><span class="rv">' +
+        series.map(function (s2) { return pick(s2.ride); }).join("  |  ") + "</span></div>";
+    }
+    line("Roughness moving", function (r) { return (r.movRms || r.rms || 0).toFixed(2) + " g"; });
+    line("Hardest hit", function (r) { return (r.peak || 0).toFixed(1) + " g"; });
+    line("Vertical", function (r) { return (r.vRms || 0).toFixed(2) + " g"; });
+    line("Sideways", function (r) { return (r.lRms || 0).toFixed(2) + " g"; });
+    line("Top speed", function (r) { return (r.maxSpd || 0).toFixed(0) + " km/h"; });
+    line("Distance", function (r) { return ((r.dist || 0) / 1000).toFixed(2) + " km"; });
+    line("Descended", function (r) { return (r.drop || 0) + " m"; });
+    line("Riding time", function (r) { return hms((r.movSec || 0) * 1000); });
+    line("Stops", function (r) { return (r.pauses || 0) + ""; });
+    $("cmpRows").innerHTML = rowsHtml;
+  }).catch(function (e) {
+    $("cmpCap").textContent = "Could not read those runs: " + (e && e.message ? e.message : e);
+  });
+}
+$("cmpBack").onclick = function () { $("cmpSheet").classList.remove("on"); };
 
 /* ------------------------------------------------------------- detail */
 var openR = null, openPts = null, openChunks = null, openJumps = null, openRough = null;
@@ -1681,11 +1876,19 @@ function openRide(r) {
     if (r.gpsAcc !== null && r.gpsAcc !== undefined) {
       cells.push([r.gpsAcc.toFixed(0) + " m", "average fix accuracy, over 30 means no sky view"]);
     }
-    if (r.gpsStuck) cells.push(["stuck", "GPS reported one spot the whole time"]);
+    if (r.gpsStuck) cells.push(["stuck", "GPS never moved the whole run"]);
     if (r.mountRatio !== null && r.mountRatio !== undefined) {
       cells.push([r.mountRatio.toFixed(2), "sideways against vertical energy, 1.41 is shapeless"]);
     }
-    if (r.rms) cells.push([surfaceOf(r.rms), "what the surface felt like"]);
+    if (r.rms) cells.push([surfaceOf(r.movRms || r.rms), "what the surface felt like"]);
+    if (r.movRms) {
+      cells.push([r.movRms.toFixed(3) + " g", "roughness while actually moving"]);
+      cells.push([hms((r.movSec || 0) * 1000), "of that spent riding"]);
+    }
+    if (r.pauses) {
+      cells.push([r.pauses + " x " + (r.pausedSec || 0) + " s",
+                  "stops during the run, kept out of the figures"]);
+    }
     if (r.gpsCoarse) cells.push([r.gpsCoarse, "fixes too coarse to use"]);
     if (r.gpsGapMed !== null && r.gpsGapMed !== undefined) {
       cells.push([r.gpsGapMed + " s", "typical gap between GPS fixes"]);
@@ -1696,7 +1899,7 @@ function openRide(r) {
     }
     if (r.clip) {
       cells.push([Math.round(r.clip / Math.max(r.nAccel, 1) * 1000) / 10 + "%",
-                  "readings at the sensor ceiling, treat jump forces as unreliable"]);
+                  "readings over 9 g"]);
     }
     $("sheetGrid").innerHTML = cells.map(function (cc) {
       return cellHtml(cc[0], cc[1]);
@@ -2042,6 +2245,10 @@ function metaLines(r, jumps) {
     "# descended_m," + (r.drop || 0),
     "# top_speed_kmh," + (r.maxSpd || 0),
     "# roughness_rms_g," + (r.rms || 0),
+    "# roughness_moving_g," + (r.movRms === null || r.movRms === undefined ? "" : r.movRms),
+    "# moving_time_s," + (r.movSec || 0),
+    "# stops," + (r.pauses || 0),
+    "# stopped_time_s," + (r.pausedSec || 0),
     "# peak_g," + (r.peak || 0),
     "# sample_rate_hz," + (r.hz || 0),
     "# vertical_rms_g," + (r.vRms === null || r.vRms === undefined ? "" : r.vRms),
@@ -2120,7 +2327,7 @@ function combinedCsvParts(r, pts, chunks, jumps) {
 function secondCsvParts(r, pts, rough, jumps) {
   var head = ["t_s", "roughness_g", "lat", "lon", "alt_m", "gps_acc_m", "speed_kmh", "in_air"];
   var parts = [metaLines(r, jumps), head.join(",") + "\n"];
-  var secs = Math.max(rough ? rough.length : 0, Math.ceil((r.dur || 0) / 1000));
+  var secs = (rough && rough.length) ? rough.length : Math.ceil((r.dur || 0) / 1000);
   var sorted = (pts || []).slice().sort(function (a, b) { return a.t - b.t; });
   var rows = [], g = 0, last = null;
   for (var sec = 0; sec < secs; sec++) {
@@ -2148,21 +2355,23 @@ function dayKey(ts) {
 /* Every ride from one day in a single table, each row tagged with its ride number.
    Per ride summaries and jumps ride along as # comment lines above the data. */
 function dayParts(key, list, gpsByRide) {
-  var spotOf = {}, cl = clusterByPlace(list);
-  cl.spots.forEach(function (runs, i) {
-    runs.forEach(function (r) { spotOf[r.id] = "spot" + (i + 1); });
+  var trailOf = {}, cl = clusterByPlace(list);
+  cl.trails.forEach(function (runs, i) {
+    runs.forEach(function (r) { trailOf[r.id] = "trail" + (i + 1); });
   });
-  cl.unplaced.forEach(function (r) { spotOf[r.id] = "unknown"; });
+  cl.unplaced.forEach(function (r) { trailOf[r.id] = "unknown"; });
   var head = [
     "# bumplog " + VERSION,
     "# day," + key,
     "# session," + (sessionNumbers()[key] || ""),
     "# rides," + list.length,
     "# ride_columns,n,id,started,duration_s,distance_m,descended_m,top_speed_kmh," +
-      "roughness_rms_g,peak_g,vertical_rms_g,lateral_rms_g,mount_ratio,clipped_samples," +
+      "roughness_rms_g,roughness_moving_g,moving_time_s,stops,stopped_time_s," +
+      "peak_g,vertical_rms_g," +
+      "lateral_rms_g,mount_ratio,over_9g_samples," +
       "accel_samples,jumps,airtime_s,gps_fixes,gps_mean_accuracy_m,gps_stuck,gps_restarts," +
       "gps_prestart_dropped,gps_coarse_rejected,raw_peak_g,surface,gps_band," +
-      "spot,gps_first_fix_s,gps_gap_median_s,gps_gap_max_s,anchor_lat,anchor_lon"
+      "trail,gps_first_fix_s,gps_gap_median_s,gps_gap_max_s,anchor_lat,anchor_lon"
   ];
   var jumpLines = [], rows = [], n, i;
 
@@ -2173,13 +2382,15 @@ function dayParts(key, list, gpsByRide) {
     var jumps = r.jumps || [];
     head.push("# ride," + (n + 1) + "," + r.id + "," + new Date(r.startedAt).toISOString() + "," +
       ((r.dur || 0) / 1000).toFixed(1) + "," + (r.dist || 0) + "," + (r.drop || 0) + "," +
-      val(r.maxSpd) + "," + val(r.rms) + "," + val(r.peak) + "," +
+      val(r.maxSpd) + "," + val(r.rms) + "," + val(r.movRms) + "," + (r.movSec || 0) + "," +
+      (r.pauses || 0) + "," + (r.pausedSec || 0) + "," +
+      val(r.peak) + "," +
       val(r.vRms) + "," + val(r.lRms) + "," + val(r.mountRatio) + "," + (r.clip || 0) + "," +
       (r.nAccel || 0) + "," + jumps.length + "," + ((r.airMs || 0) / 1000).toFixed(2) + "," +
       (r.nGps || 0) + "," + val(r.gpsAcc) + "," + (r.gpsStuck ? "yes" : "no") + "," +
       (r.gpsDrops || 0) + "," + (r.gpsPreDrop || 0) + "," + (r.gpsCoarse || 0) + "," +
       val(r.rawPeak) + "," + surfaceOf(r.rms).split(",")[0] + "," + accBand(r).label + "," +
-      (spotOf[r.id] || "unknown") + "," + val(r.gpsFirstFix) + "," +
+      (trailOf[r.id] || "unknown") + "," + val(r.gpsFirstFix) + "," +
       val(r.gpsGapMed) + "," + val(r.gpsGapMax) + "," +
       (hasAnchor(r) ? r.anchorLat.toFixed(5) + "," + r.anchorLon.toFixed(5) : ","));
     for (i = 0; i < jumps.length; i++) {
