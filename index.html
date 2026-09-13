@@ -181,10 +181,19 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   margin:3px 0 0;letter-spacing:0;
 }
 .sub{
-  padding:15px var(--pad) 9px;
+  padding:14px var(--pad) 9px;
   font-size:13px;color:var(--dust);
   border-top:1px solid var(--rule);
+  background:var(--panel);
 }
+/* Runs sit inside their trail: indented, with a hairline running down beside them. */
+.list li.inTrail .ride{padding-left:calc(var(--pad) + 16px)}
+.list li.inTrail{position:relative}
+.list li.inTrail:before{
+  content:"";position:absolute;left:calc(var(--pad) + 5px);top:0;bottom:0;
+  width:2px;background:var(--rule);
+}
+.list li.lastInTrail:before{bottom:auto;height:22px}
 .subtop{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
 .subname{color:var(--cream);font-weight:600;font-size:17.5px;letter-spacing:-0.02em}
 .subfacts{margin-top:3px;font-variant-numeric:tabular-nums}
@@ -349,7 +358,7 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
       <h2>Sessions</h2>
       <span class="sub" id="ridesSub" style="margin-left:auto"></span>
       <button id="btnDay" style="font-size:15px;color:var(--orange)">Send a day</button>
-      <button id="btnEdit" style="font-size:15px;color:var(--orange)">Edit</button>
+      <button id="btnEdit" style="font-size:15px;color:var(--orange)">Enable delete</button>
     </div>
     <ul class="list" id="rideList"></ul>
   </section>
@@ -372,14 +381,18 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
       <div class="row"><span>GPS restarts</span><span class="rv" id="sGpsRe"></span></div>
       <div class="row"><span>Offline copy installed</span><span class="rv" id="sSw"></span></div>
       <div class="row"><span>Stored on this phone</span><span class="rv" id="sDisk"></span></div>
+      <div class="row"><span>Figures worked out with</span><span class="rv" id="sCalc"></span></div>
     </div>
 
     <div class="btnrow">
       <button class="big go" id="btnAllow">Allow motion access</button>
       <button class="big" id="btnUpdate">Check for update</button>
       <button class="big" id="btnRefetch">Re-download the app files</button>
+      <button class="big" id="btnRecalc">Work out every run again</button>
+      <button class="big" id="setDelete">Turn deleting on</button>
       <button class="big" id="btnBackup">Copy a backup</button>
       <button class="big" id="btnRestore">Restore from a pasted backup</button>
+      <button class="big" id="btnFetch">Load a backup from the web</button>
       <button class="big" id="btnWipe" style="color:var(--red)">Delete everything</button>
     </div>
 
@@ -507,6 +520,11 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
     <div class="tip">
       <p>Paste a backup below and tap Restore. Runs already on this phone are left
       alone, so restoring twice does no harm.</p>
+      <p>To move everything to another iPhone: copy a backup here, paste it into a new
+      file called <b>backup.json</b> in the same GitHub repo as the app, then on the other
+      phone open the app and use <b>Load a backup from the web</b>. It reads
+      <b>backup.json</b> from the app's own folder, so neither phone has to handle a
+      file.</p>
     </div>
     <textarea id="restText" placeholder="paste the backup here"></textarea>
     <div class="btnrow"><button class="big go" id="restGo">Restore</button></div>
@@ -976,7 +994,7 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.33";
+var VERSION = "1.35";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
@@ -1561,7 +1579,24 @@ function drawTrack(pts, rough, jumps) {
 }
 
 /* ----------------------------------------------------------- rides list */
-var rides = [], editMode = false;
+var rides = [];
+/* Deleting stays switched off until you ask for it, and the app remembers, so a
+   stray tap on a run row can never erase a session. */
+function deleteAllowed() {
+  try { return localStorage.getItem("bumplogDelete") === "on"; } catch (e) { return false; }
+}
+function setDeleteAllowed(on) {
+  try { localStorage.setItem("bumplogDelete", on ? "on" : "off"); } catch (e) { /* private */ }
+}
+function paintDeleteState() {
+  var on = deleteAllowed();
+  $("rideList").classList.toggle("editing", on);
+  $("btnEdit").textContent = on ? "Deleting on" : "Enable delete";
+  $("btnEdit").style.color = on ? "var(--red)" : "var(--orange)";
+  if ($("setDelete")) {
+    $("setDelete").textContent = on ? "Turn deleting off" : "Turn deleting on";
+  }
+}
 /* One colour per session so a day of riding reads as a single block. */
 var SESSION_TINTS = ["#F4671F", "#7BC28C", "#E8C25A", "#C98BD6", "#6FA8D6", "#DC4A3D"];
 
@@ -1603,11 +1638,35 @@ function deleteAllRides() {
 }
 
 $("btnEdit").onclick = function () {
-  editMode = !editMode;
-  $("rideList").classList.toggle("editing", editMode);
-  $("btnEdit").textContent = editMode ? "Done" : "Edit";
+  setDeleteAllowed(!deleteAllowed());
+  paintDeleteState();
 };
-$("btnWipe").onclick = deleteAllRides;
+$("btnRecalc").onclick = function () {
+  if (!confirm("Work out every run again from its stored samples?\n\n" +
+      "Distance, descent, stops, roughness and jumps are recalculated with the " +
+      "current maths. Nothing is deleted. This can take a minute.")) return;
+  $("btnRecalc").textContent = "Working";
+  recomputeAll(true, function (i, n) {
+    $("btnRecalc").textContent = "Run " + i + " of " + n;
+  }).then(function (n) {
+    $("btnRecalc").textContent = "Work out every run again";
+    toast(n + " runs worked out again");
+    return renderRides();
+  }).then(function () { renderSetup(); }).catch(function (e) {
+    $("btnRecalc").textContent = "Work out every run again";
+    toast("Recompute failed: " + (e && e.message ? e.message : e));
+  });
+};
+
+$("setDelete").onclick = function () {
+  setDeleteAllowed(!deleteAllowed());
+  paintDeleteState();
+  toast(deleteAllowed() ? "Deleting switched on" : "Deleting switched off");
+};
+$("btnWipe").onclick = function () {
+  if (!deleteAllowed()) { toast("Turn deleting on first."); return; }
+  deleteAllRides();
+};
 
 /* A backup carries the ride summaries, the per second roughness and the GPS tracks.
    The raw 60 Hz samples are left out on purpose: they are megabytes per run and the
@@ -1646,34 +1705,59 @@ $("btnRestore").onclick = function () {
   $("restSheet").classList.add("on");
 };
 $("restBack").onclick = function () { $("restSheet").classList.remove("on"); };
+/* Moving data between phones without ever touching a file: the backup sits next to
+   the app on GitHub Pages, and the other phone reads it from the same folder. */
+function importBackup(data) {
+  if (!data || !data.rides || !data.rides.length) {
+    return Promise.reject(new Error("no runs found in that backup"));
+  }
+  return getAll("rides").then(function (have) {
+    var seen = {};
+    have.forEach(function (r) { seen[r.id] = 1; });
+    var added = 0, skipped = 0, jobs = [];
+    data.rides.forEach(function (r) {
+      if (seen[r.id]) { skipped++; return; }
+      added++;
+      jobs.push(put("rides", r));
+    });
+    (data.gps || []).forEach(function (g) {
+      if (!seen[g.ride]) jobs.push(put("gps", g));
+    });
+    return Promise.all(jobs)
+      .then(function () { return renderRides(); })
+      .then(updateStorage)
+      .then(function () { return { added: added, skipped: skipped }; });
+  });
+}
+
+$("btnFetch").onclick = function () {
+  var url = prompt("Address of the backup.\n\nLeave this as it is to read backup.json " +
+                   "from the same folder as the app.", "./backup.json");
+  if (!url) return;
+  toast("Fetching the backup");
+  fetch(url + (url.indexOf("?") < 0 ? "?t=" : "&t=") + Date.now(), { cache: "no-store" })
+    .then(function (res) {
+      if (!res.ok) throw new Error("server said " + res.status);
+      return res.json();
+    })
+    .then(importBackup)
+    .then(function (n) {
+      toast(n.added + " runs loaded, " + n.skipped + " already here");
+      go("scRides");
+    })
+    .catch(function (e) { toast("Could not load: " + (e && e.message ? e.message : e)); });
+};
+
 $("restGo").onclick = function () {
   var raw = $("restText").value.trim();
   if (!raw) { $("restNote").textContent = "Nothing pasted yet."; return; }
   var data;
   try { data = JSON.parse(raw); }
   catch (e) { $("restNote").textContent = "That is not valid backup text: " + e.message; return; }
-  if (!data || !data.rides || !data.rides.length) {
-    $("restNote").textContent = "No rides found in that text.";
-    return;
-  }
-  $("restNote").textContent = "Restoring " + data.rides.length + " runs";
-  getAll("rides").then(function (have) {
-    var seen = {};
-    have.forEach(function (r) { seen[r.id] = 1; });
-    var added = 0, skipped = 0;
-    var jobs = data.rides.map(function (r) {
-      if (seen[r.id]) { skipped++; return Promise.resolve(); }
-      added++;
-      return put("rides", r);
-    });
-    (data.gps || []).forEach(function (g) {
-      if (!seen[g.ride]) jobs.push(put("gps", g));
-    });
-    return Promise.all(jobs).then(function () {
-      $("restNote").textContent = added + " runs restored, " + skipped + " already here.";
-      toast(added + " runs restored");
-      return renderRides();
-    }).then(updateStorage);
+  $("restNote").textContent = "Restoring";
+  importBackup(data).then(function (n) {
+    $("restNote").textContent = n.added + " runs restored, " + n.skipped + " already here.";
+    toast(n.added + " runs restored");
   }).catch(function (e) {
     $("restNote").textContent = "Restore failed: " + (e && e.message ? e.message : e);
   });
@@ -1806,6 +1890,7 @@ function rideRow(r, ul, tag, tintRow) {
   dbtn.onclick = function () { confirmDelete(r); };
   li.appendChild(dbtn);
   if (tintRow) tintRow(li);
+  li.className += " inTrail";
   ul.appendChild(li);
   drawSpark(b.querySelector("canvas"), r.rough);
 }
@@ -1901,7 +1986,10 @@ function renderRides() {
         sub.appendChild(facts);
         tintRow(sub);
         ul.appendChild(sub);
-        runs.forEach(function (r) { rideRow(r, ul, "Run " + runNo[r.id], tintRow); });
+        runs.forEach(function (r, ri) {
+          rideRow(r, ul, "Run " + runNo[r.id], tintRow);
+          if (ri === runs.length - 1) ul.lastChild.className += " lastInTrail";
+        });
       });
 
       if (res.unplaced.length) {
@@ -1919,6 +2007,7 @@ function renderRides() {
       }
     });
 
+    paintDeleteState();
     $("ridesSub").textContent = (totD / 1000).toFixed(1) + " km, " +
       (totS / 1000).toFixed(0) + "k samples";
   });
@@ -3185,6 +3274,227 @@ Array.prototype.slice.call(document.querySelectorAll(".act[data-x]")).forEach(fu
   };
 });
 
+/* -------------------------------------------------- recomputing old runs
+
+   Everything below was originally worked out live while recording, with whatever
+   maths the app had that day. Several of those were wrong: descent counted GPS
+   wander while standing still, distance used gates far too strict for this phone,
+   and stops were not detected at all. The raw material is still here, so the runs
+   can simply be worked out again with the current maths. */
+var CALC_VER = 2;
+
+function gpsPointsOf(chunks) {
+  var pts = [];
+  chunks.sort(bySeq).forEach(function (ch) { pts = pts.concat(ch.p || []); });
+  pts.sort(function (a, b) { return a.t - b.t; });
+  return pts;
+}
+
+function recomputeGps(pts, durMs) {
+  var out = {
+    dist: 0, drop: 0, maxSpd: 0, movSec: 0, pauses: 0, pausedSec: 0,
+    nGps: pts.length, gpsAcc: null, gpsFirstFix: null, gpsGapMed: null, gpsGapMax: null,
+    gpsCoarse: 0, gpsStuck: 0
+  };
+  if (!pts.length) return out;
+
+  var accSum = 0, accN = 0, times = [], seeded = false, last = null;
+  var altWin = [], lastAlt = null, still = 0, movN = 0, secN = 0;
+  var movePt = null, moveT = 0;
+
+  pts.forEach(function (p) {
+    var acc = (p.acc === null || p.acc === undefined) ? 999 : p.acc;
+    if (acc > GPS_STORE_ACC) { out.gpsCoarse++; return; }
+    accSum += acc; accN++;
+    times.push(p.t);
+
+    if (!seeded) {
+      if (acc > GPS_SEED_ACC && p.t < GPS_SEED_WAIT) return;
+      seeded = true; last = null;
+    }
+
+    var spd = (p.spd !== null && p.spd !== undefined && p.spd >= 0) ? p.spd * 3.6 : null;
+    if (spd === null && last) {
+      var dt0 = Math.max(0.2, (p.t - last.t) / 1000);
+      spd = haversine(last, p) / dt0 * 3.6;
+    }
+    if (spd === null) spd = 0;
+    if (spd > out.maxSpd) out.maxSpd = spd;
+
+    secN++;
+    if (spd > 5) movN++;
+    if (spd < 3) { still++; } else {
+      if (still >= 5) { out.pauses++; out.pausedSec += still; }
+      still = 0;
+    }
+
+    if (last && acc <= GPS_USE_ACC) {
+      var d = haversine(last, p);
+      var dt = Math.max(0.2, (p.t - last.t) / 1000);
+      if (d > Math.max(1, acc * 0.15) && d / dt < GPS_MAX_MS) out.dist += d;
+    }
+
+    if (spd > 5 && p.alt !== null && p.alt !== undefined && acc <= GPS_SEED_ACC &&
+        (p.altAcc === null || p.altAcc === undefined || p.altAcc <= 40)) {
+      altWin.push(p.alt);
+      if (altWin.length > 3) altWin.shift();
+      if (altWin.length === 3) {
+        var srt = altWin.slice().sort(function (a, b) { return a - b; });
+        var med = srt[1];
+        if (lastAlt === null) lastAlt = med;
+        else {
+          var dh = med - lastAlt;
+          if (dh < -2.5) { out.drop += -dh; lastAlt = med; }
+          else if (dh > 2.5) { lastAlt = med; }
+        }
+      }
+    }
+
+    if (!movePt) { movePt = p; moveT = p.t; }
+    else if (haversine(movePt, p) > 5) { movePt = p; moveT = p.t; }
+    last = p;
+  });
+
+  if (still >= 5) { out.pauses++; out.pausedSec += still; }
+  out.dist = Math.round(out.dist);
+  out.drop = Math.round(out.drop);
+  out.maxSpd = Math.round(out.maxSpd * 10) / 10;
+  out.movSec = Math.round(movN * (secN ? (durMs / 1000) / secN : 1));
+  out.gpsAcc = accN ? Math.round(accSum / accN * 10) / 10 : null;
+  out.gpsFirstFix = times.length ? Math.round(times[0] / 1000) : null;
+  out.gpsGapMed = gapStat(times, "med");
+  out.gpsGapMax = gapStat(times, "max");
+  out.gpsStuck = (pts.length > 5 && durMs - moveT > 60000) ? 1 : 0;
+  return out;
+}
+
+/* Speed per second, so the accelerometer pass knows when the bike was moving. */
+function speedBySecond(pts, secs) {
+  var arr = new Float32Array(secs), i = 0, sec, cur = 0;
+  for (sec = 0; sec < secs; sec++) {
+    while (i < pts.length && pts[i].t <= sec * 1000 + 500) {
+      var p = pts[i++];
+      if (p.spd !== null && p.spd !== undefined && p.spd >= 0) cur = p.spd * 3.6;
+    }
+    arr[sec] = cur;
+  }
+  return arr;
+}
+
+function recomputeAccel(chunks, pts, durMs) {
+  chunks.sort(bySeq);
+  var secs = Math.max(1, Math.ceil(durMs / 1000));
+  var spd = speedBySecond(pts, secs);
+  var ema = 1, sumSq = 0, n = 0, peak = 0, rawPeak = 0, clip = 0;
+  var movSq = 0, movN = 0, vSum = 0, lSum = 0, vlN = 0, maxTurn = 0;
+  var rough = [], secSq = 0, secCount = 0, secIdx = 0;
+  var air = makeAirDetector(), hasLin = false, c, i;
+
+  for (c = 0; c < chunks.length; c++) {
+    var ch = chunks[c];
+    for (i = 0; i < ch.t.length; i++) {
+      var t = ch.t[i];
+      var x = ch.x[i], y = ch.y[i], z = ch.z[i];
+      var mag = Math.sqrt(x * x + y * y + z * z) / G;
+      ema += (mag - ema) * 0.05;
+      var hp = mag - ema;
+      n++;
+      sumSq += hp * hp;
+      var ab = hp < 0 ? -hp : hp;
+      if (ab > peak) peak = ab;
+      if (mag > rawPeak) rawPeak = mag;
+      if (mag > 9) clip++;
+      air.push(t, mag);
+
+      var sec = Math.floor(t / 1000);
+      if (sec < secs && spd[sec] > 5) { movSq += hp * hp; movN++; }
+
+      if (ch.lx && ch.lx[i] === ch.lx[i]) {
+        hasLin = true;
+        var gx = x - ch.lx[i], gy = y - ch.ly[i], gz = z - ch.lz[i];
+        var gm = Math.sqrt(gx * gx + gy * gy + gz * gz);
+        if (gm > 1) {
+          var ux = gx / gm, uy = gy / gm, uz = gz / gm;
+          var vert = (ch.lx[i] * ux + ch.ly[i] * uy + ch.lz[i] * uz) / G;
+          var hx = ch.lx[i] / G - vert * ux, hy = ch.ly[i] / G - vert * uy,
+              hz = ch.lz[i] / G - vert * uz;
+          vSum += vert * vert;
+          lSum += hx * hx + hy * hy + hz * hz;
+          vlN++;
+        }
+      }
+      if (ch.ra && ch.ra[i] === ch.ra[i]) {
+        var rm = Math.sqrt(ch.ra[i] * ch.ra[i] + ch.rb[i] * ch.rb[i] + ch.rg[i] * ch.rg[i]);
+        if (rm > maxTurn) maxTurn = rm;
+      }
+
+      secSq += hp * hp; secCount++;
+      while (secIdx < sec) {
+        rough.push(secCount ? Math.round(Math.sqrt(secSq / secCount) * 1000) / 1000 : 0);
+        secSq = 0; secCount = 0; secIdx++;
+      }
+    }
+  }
+  if (secCount) rough.push(Math.round(Math.sqrt(secSq / secCount) * 1000) / 1000);
+  air.finish();
+
+  var out = {
+    nAccel: n,
+    rms: n ? Math.round(Math.sqrt(sumSq / n) * 1000) / 1000 : 0,
+    movRms: movN ? Math.round(Math.sqrt(movSq / movN) * 1000) / 1000 : null,
+    peak: Math.round(peak * 100) / 100,
+    rawPeak: Math.round(rawPeak * 100) / 100,
+    clip: clip,
+    rough: rough,
+    jumps: air.jumps,
+    airMs: Math.round(air.airMs),
+    hz: n && durMs ? Math.round(n / (durMs / 1000)) : 0
+  };
+  if (hasLin && vlN) {
+    out.vRms = Math.round(Math.sqrt(vSum / vlN) * 1000) / 1000;
+    out.lRms = Math.round(Math.sqrt(lSum / vlN) * 1000) / 1000;
+    out.mountRatio = Math.round(Math.sqrt(lSum / vSum) * 100) / 100;
+  }
+  if (maxTurn) out.maxTurn = Math.round(maxTurn);
+  return out;
+}
+
+function recomputeRide(r, deep) {
+  return byRide("gps", r.id).then(function (gc) {
+    var pts = gpsPointsOf(gc);
+    var g = recomputeGps(pts, r.dur || 0);
+    var k;
+    for (k in g) { if (g.hasOwnProperty(k)) r[k] = g[k]; }
+    if (!deep) return null;
+    return byRide("accel", r.id).then(function (ac) {
+      if (!ac.length) return null;
+      var a = recomputeAccel(ac, pts, r.dur || 0);
+      for (var k2 in a) { if (a.hasOwnProperty(k2)) r[k2] = a[k2]; }
+      return null;
+    });
+  }).then(function () {
+    r.calcVer = CALC_VER;
+    r.geoDone = 0;
+    return put("rides", r);
+  });
+}
+
+function recomputeAll(deep, onStep) {
+  return getAll("rides").then(function (rows) {
+    var list = rows.filter(function (r) { return !r.open; });
+    var i = 0;
+    function next() {
+      if (i >= list.length) return Promise.resolve(list.length);
+      var r = list[i++];
+      if (onStep) onStep(i, list.length);
+      return recomputeRide(r, deep).then(function () {
+        return new Promise(function (res) { setTimeout(res, 0); }).then(next);
+      });
+    }
+    return next();
+  });
+}
+
 /* ---------------------------------------------------- setup and updates */
 function yn(el, good, yes, no) {
   el.textContent = good ? yes : no;
@@ -3247,6 +3557,11 @@ function renderSetup() {
 
   $("sDisk").textContent = diskText || "unknown";
   $("sDisk").className = "rv";
+
+  var stale = rides.filter(function (r) { return r.calcVer !== CALC_VER; }).length;
+  var sc = $("sCalc");
+  sc.textContent = stale ? stale + " runs use older maths" : "current maths";
+  sc.className = "rv " + (stale ? "no" : "ok");
 
   $("btnAllow").style.display = motionReady ? "none" : "block";
 }
@@ -3360,6 +3675,19 @@ openDB().then(function () {
   });
 }).then(function () {
   return renderRides();
+}).then(function () {
+  /* The GPS derived figures are cheap to redo, so bring old runs up to date quietly.
+     The accelerometer pass is heavier and stays on the Setup button. */
+  return getAll("rides").then(function (rows) {
+    var stale = rows.filter(function (r) { return !r.open && r.calcVer !== CALC_VER; });
+    if (!stale.length) return null;
+    var i = 0;
+    function next() {
+      if (i >= stale.length) return renderRides();
+      return recomputeRide(stale[i++], false).then(next);
+    }
+    return next();
+  }).catch(function () { /* leave the old figures rather than break the list */ });
 }).then(function () {
   updateStorage();
   setInterval(updateStorage, 20000);
