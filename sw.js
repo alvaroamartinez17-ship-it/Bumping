@@ -1,6 +1,6 @@
 /* Bumplog service worker — cache only, no network after install.
    Bump CACHE when you change any file, or the phone keeps the old copy. */
-var CACHE = "bumplog-v32";
+var CACHE = "bumplog-v34";
 var FILES = [
   "./",
   "./index.html",

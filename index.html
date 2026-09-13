@@ -163,12 +163,22 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .list.editing .del{display:flex}
 .list li.sect,.list li.sub{display:block;border:0}
 .sect{
-  padding:26px var(--pad) 6px;
+  padding:26px var(--pad) 8px;
   font-size:23px;font-weight:700;letter-spacing:-0.03em;
+  display:flex;align-items:baseline;gap:10px;
 }
-.sect span{
+.sect .tint{
+  width:12px;height:12px;border-radius:3px;flex:0 0 auto;
+  align-self:center;
+}
+.sect .grow{flex:1}
+.sect button{font-size:14px;font-weight:400;color:var(--red);flex:0 0 auto;display:none}
+.list.editing .sect button,.list.editing .sub .kill{display:block}
+.sub .kill{display:none;color:var(--red);font-size:13px}
+.list li.tinted{border-left:3px solid transparent}
+.sect .sub2{
   display:block;font-weight:400;color:var(--dust);font-size:13px;
-  margin:2px 0 0;letter-spacing:0;
+  margin:3px 0 0;letter-spacing:0;
 }
 .sub{
   padding:15px var(--pad) 9px;
@@ -231,12 +241,13 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 }
 .big.go{background:var(--orange);color:#1A1105;border-color:var(--orange);font-weight:600}
 a.big{display:block;text-decoration:none;color:var(--cream)}
-#expText{
+#expText,#restText{
   display:block;width:calc(100% - var(--pad) * 2);margin:16px var(--pad) 0;height:130px;
   background:var(--panel);color:var(--dust);border:1px solid var(--rule);border-radius:3px;
   font-family:ui-monospace,Menlo,monospace;font-size:11px;padding:9px;
   -webkit-user-select:text;user-select:text;
 }
+#restText{height:170px;color:var(--cream)}
 .tip{padding:18px var(--pad) 30px;font-size:13px;color:var(--dust);line-height:1.6}
 .tip p{margin:0 0 11px}
 .tip b{color:var(--cream);font-weight:600}
@@ -335,7 +346,7 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
   <!-- ============ RIDES ============ -->
   <section class="screen" id="scRides">
     <div class="head">
-      <h2>Rides</h2>
+      <h2>Sessions</h2>
       <span class="sub" id="ridesSub" style="margin-left:auto"></span>
       <button id="btnDay" style="font-size:15px;color:var(--orange)">Send a day</button>
       <button id="btnEdit" style="font-size:15px;color:var(--orange)">Edit</button>
@@ -367,7 +378,9 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
       <button class="big go" id="btnAllow">Allow motion access</button>
       <button class="big" id="btnUpdate">Check for update</button>
       <button class="big" id="btnRefetch">Re-download the app files</button>
-      <button class="big" id="btnWipe" style="color:var(--red)">Delete all rides</button>
+      <button class="big" id="btnBackup">Copy a backup</button>
+      <button class="big" id="btnRestore">Restore from a pasted backup</button>
+      <button class="big" id="btnWipe" style="color:var(--red)">Delete everything</button>
     </div>
 
     <div class="tip">
@@ -381,7 +394,7 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
 
   <nav class="tabs">
     <button class="tab on" data-go="scRec">Record</button>
-    <button class="tab" data-go="scRides">Rides <span class="badge" id="tabCount"></span></button>
+    <button class="tab" data-go="scRides">Sessions <span class="badge" id="tabCount"></span></button>
     <button class="tab" data-go="scSetup">Setup</button>
   </nav>
 </div>
@@ -484,36 +497,43 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
   </div>
 </div>
 
+<div class="sheet" id="restSheet">
+  <div class="sheetbar">
+    <button id="restBack">Close</button>
+    <span class="t">Restore a backup</span>
+    <span style="width:46px"></span>
+  </div>
+  <div class="sheetbody">
+    <div class="tip">
+      <p>Paste a backup below and tap Restore. Runs already on this phone are left
+      alone, so restoring twice does no harm.</p>
+    </div>
+    <textarea id="restText" placeholder="paste the backup here"></textarea>
+    <div class="btnrow"><button class="big go" id="restGo">Restore</button></div>
+    <div class="tip"><p id="restNote"></p></div>
+  </div>
+</div>
+
 <div class="sheet" id="expSheet">
   <div class="sheetbar">
     <button id="expBack">Close</button>
-    <span class="t">Save the file</span>
+    <span class="t">Copy this out</span>
     <span style="width:46px"></span>
   </div>
   <div class="sheetbody">
     <div class="rows">
       <div class="row"><span>File</span><span class="rv" id="expName"></span></div>
       <div class="row"><span>Size</span><span class="rv" id="expSize"></span></div>
-      <div class="row"><span>Automatic save</span><span class="rv no" id="expWhy"></span></div>
+      <div class="row"><span>Status</span><span class="rv ok" id="expWhy"></span></div>
     </div>
     <div class="btnrow">
-      <button class="big go" id="expCopy">Copy all of it to the clipboard</button>
-      <button class="big" id="expShare">Try Save to Files again</button>
-      <button class="big" id="expShareText">Share it as a message instead</button>
-      <a class="big" id="expDl" download>Download it</a>
+      <button class="big go" id="expCopy">Copy all of it</button>
     </div>
     <div class="tip">
-      <p><b>Copy all of it</b> puts the whole file on the clipboard. Paste it into Notes,
-      save the note, and you have it on the phone for later. For the summary export this is
-      the route that always works.</p>
-      <p><b>Save to Files</b> opens the iOS share sheet, then pick Save to Files and On My
-      iPhone. iOS only shares file types it recognises, so this tries plainer and plainer
-      versions of the same data until one is accepted.</p>
-      <p><b>Share it as a message</b> sends the contents as text rather than a file, which
-      works for the summary but not for a long raw export.</p>
-      <p><b>Download it</b> works in Safari but does nothing when the app is launched from
-      the home screen, because a home screen app has no download manager.</p>
-
+      <p>Copy puts the whole file on the clipboard. Paste it into Notes, an email, or
+      straight into a message.</p>
+      <p>Saving to Files, downloading and sharing as a message have been removed. iOS
+      refused all three from a home screen app, so they only ever wasted taps.</p>
     </div>
     <textarea id="expText" readonly></textarea>
   </div>
@@ -956,7 +976,7 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.31";
+var VERSION = "1.33";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
@@ -1542,6 +1562,8 @@ function drawTrack(pts, rough, jumps) {
 
 /* ----------------------------------------------------------- rides list */
 var rides = [], editMode = false;
+/* One colour per session so a day of riding reads as a single block. */
+var SESSION_TINTS = ["#F4671F", "#7BC28C", "#E8C25A", "#C98BD6", "#6FA8D6", "#DC4A3D"];
 
 function confirmDelete(r) {
   if (!confirm("Delete the ride from " + dateLabel(r.startedAt) + "?\n\n" +
@@ -1554,9 +1576,23 @@ function confirmDelete(r) {
   });
 }
 
+function deleteGroup(list, label) {
+  if (!list.length) return;
+  var mins = 0;
+  list.forEach(function (r) { mins += r.dur || 0; });
+  if (!confirm("Delete " + label + "?\n\n" + list.length +
+      (list.length === 1 ? " run, " : " runs, ") + hms(mins) +
+      " of recording will be erased for good.")) return;
+  Promise.all(list.map(function (r) { return delRide(r.id); })).then(function () {
+    renderRides();
+    updateStorage();
+    toast(label + " deleted");
+  });
+}
+
 function deleteAllRides() {
-  if (!rides.length) { toast("There are no rides to delete"); return; }
-  if (!confirm("Delete all " + rides.length + " rides?\n\nEverything recorded on this phone " +
+  if (!rides.length) { toast("There is nothing to delete"); return; }
+  if (!confirm("Delete all " + rides.length + " runs?\n\nEverything recorded on this phone " +
       "will be erased. Export anything you want to keep first.")) return;
   if (!confirm("Last check. This cannot be undone.")) return;
   Promise.all(rides.map(function (r) { return delRide(r.id); })).then(function () {
@@ -1572,6 +1608,76 @@ $("btnEdit").onclick = function () {
   $("btnEdit").textContent = editMode ? "Done" : "Edit";
 };
 $("btnWipe").onclick = deleteAllRides;
+
+/* A backup carries the ride summaries, the per second roughness and the GPS tracks.
+   The raw 60 Hz samples are left out on purpose: they are megabytes per run and the
+   clipboard is the only way off this phone that actually works. */
+function backupParts() {
+  return getAll("rides").then(function (rs) {
+    return getAll("gps").then(function (gs) {
+      var parts = ['{\n"bumplogBackup": ' + JSON.stringify(VERSION) +
+        ',\n"made": ' + JSON.stringify(new Date().toISOString()) +
+        ',\n"contains": "ride summaries, per second roughness and GPS tracks. ' +
+        'Raw accelerometer samples are not included.",\n"rides": ' +
+        JSON.stringify(rs) + ',\n"gps": ['];
+      var buf = [], first = true, i;
+      for (i = 0; i < gs.length; i++) {
+        buf.push(JSON.stringify(gs[i]));
+        if (buf.length >= 200) { parts.push((first ? "" : ",") + buf.join(",")); first = false; buf = []; }
+      }
+      if (buf.length) parts.push((first ? "" : ",") + buf.join(","));
+      parts.push("]\n}\n");
+      return { parts: parts, rides: rs.length, chunks: gs.length };
+    });
+  });
+}
+$("btnBackup").onclick = function () {
+  toast("Building the backup");
+  backupParts().then(function (b) {
+    var d = new Date();
+    deliver("bumplog-backup-" + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + ".json",
+            b.parts, "application/json");
+  }).catch(function (e) { toast("Backup failed: " + (e && e.message ? e.message : e)); });
+};
+
+$("btnRestore").onclick = function () {
+  $("restText").value = "";
+  $("restNote").textContent = "";
+  $("restSheet").classList.add("on");
+};
+$("restBack").onclick = function () { $("restSheet").classList.remove("on"); };
+$("restGo").onclick = function () {
+  var raw = $("restText").value.trim();
+  if (!raw) { $("restNote").textContent = "Nothing pasted yet."; return; }
+  var data;
+  try { data = JSON.parse(raw); }
+  catch (e) { $("restNote").textContent = "That is not valid backup text: " + e.message; return; }
+  if (!data || !data.rides || !data.rides.length) {
+    $("restNote").textContent = "No rides found in that text.";
+    return;
+  }
+  $("restNote").textContent = "Restoring " + data.rides.length + " runs";
+  getAll("rides").then(function (have) {
+    var seen = {};
+    have.forEach(function (r) { seen[r.id] = 1; });
+    var added = 0, skipped = 0;
+    var jobs = data.rides.map(function (r) {
+      if (seen[r.id]) { skipped++; return Promise.resolve(); }
+      added++;
+      return put("rides", r);
+    });
+    (data.gps || []).forEach(function (g) {
+      if (!seen[g.ride]) jobs.push(put("gps", g));
+    });
+    return Promise.all(jobs).then(function () {
+      $("restNote").textContent = added + " runs restored, " + skipped + " already here.";
+      toast(added + " runs restored");
+      return renderRides();
+    }).then(updateStorage);
+  }).catch(function (e) {
+    $("restNote").textContent = "Restore failed: " + (e && e.message ? e.message : e);
+  });
+};
 
 
 /* Rides are grouped first by the day they happened on, numbered as sessions in the
@@ -1680,7 +1786,7 @@ function sessionNumbers() {
   return map;
 }
 
-function rideRow(r, ul, tag) {
+function rideRow(r, ul, tag, tintRow) {
   var li = document.createElement("li");
   var b = document.createElement("button");
   b.className = "ride";
@@ -1699,6 +1805,7 @@ function rideRow(r, ul, tag) {
   dbtn.textContent = "Delete";
   dbtn.onclick = function () { confirmDelete(r); };
   li.appendChild(dbtn);
+  if (tintRow) tintRow(li);
   ul.appendChild(li);
   drawSpark(b.querySelector("canvas"), r.rough);
 }
@@ -1733,19 +1840,36 @@ function renderRides() {
 
     dayOrder.forEach(function (k) {
       var group = byDay[k];
+      var tint = SESSION_TINTS[(sess[k] - 1) % SESSION_TINTS.length];
+      var dayDist = 0, dayMove = 0;
+      group.forEach(function (r) {
+        dayDist += r.dist || 0;
+        dayMove += (r.movSec ? r.movSec * 1000 : r.dur) || 0;
+      });
+
       var head = document.createElement("li");
       head.className = "sect";
-      head.innerHTML = "Session " + sess[k] +
-        '<span>' + dateLabel(group[0].startedAt).split(",")[0] + ", " +
-        group.length + (group.length === 1 ? " ride" : " rides") + "</span>";
+      head.innerHTML =
+        '<i class="tint" style="background:' + tint + '"></i>' +
+        '<span class="grow">Session ' + sess[k] +
+        '<span class="sub2">' + dateLabel(group[0].startedAt).split(",")[0] + ", " +
+        group.length + (group.length === 1 ? " run, " : " runs, ") +
+        (dayDist / 1000).toFixed(1) + " km, " + hms(dayMove) + ' riding</span></span>';
+      var delDay = document.createElement("button");
+      delDay.textContent = "Delete session";
+      delDay.onclick = function () { deleteGroup(group, "session " + sess[k]); };
+      head.appendChild(delDay);
       ul.appendChild(head);
 
       var asc = group.slice().sort(function (a, b) { return a.startedAt - b.startedAt; });
-      /* Run numbers run 1..N across the whole session in the order they were ridden,
-         not 1..n within each trail, so "run 7" means the same thing everywhere. */
       var runNo = {};
       asc.forEach(function (r, i) { runNo[r.id] = i + 1; });
       var res = clusterByPlace(asc);
+
+      function tintRow(li) {
+        li.className += " tinted";
+        li.style.borderLeftColor = tint;
+      }
 
       res.trails.forEach(function (runs, idx) {
         var rms = 0, n2 = 0;
@@ -1763,6 +1887,11 @@ function renderRides() {
           };
           top.appendChild(cmp);
         }
+        var killT = document.createElement("button");
+        killT.className = "kill";
+        killT.textContent = "Delete trail";
+        killT.onclick = function () { deleteGroup(runs, "trail " + (idx + 1)); };
+        top.appendChild(killT);
         sub.appendChild(top);
         var facts = document.createElement("div");
         facts.className = "subfacts";
@@ -1770,8 +1899,9 @@ function renderRides() {
           ", mean " + (rms / n2).toFixed(2) + " g, from " +
           runs[0].anchorLat.toFixed(4) + " " + runs[0].anchorLon.toFixed(4);
         sub.appendChild(facts);
+        tintRow(sub);
         ul.appendChild(sub);
-        runs.forEach(function (r) { rideRow(r, ul, "Run " + runNo[r.id]); });
+        runs.forEach(function (r) { rideRow(r, ul, "Run " + runNo[r.id], tintRow); });
       });
 
       if (res.unplaced.length) {
@@ -1779,11 +1909,13 @@ function renderRides() {
         res.unplaced.forEach(function (r) { rmsU += r.rms || 0; });
         var subU = document.createElement("li");
         subU.className = "sub";
-        subU.innerHTML = "<span>Location unknown</span><span>" + res.unplaced.length +
-          (res.unplaced.length === 1 ? " run" : " runs") + ", mean <b>" +
-          (rmsU / res.unplaced.length).toFixed(2) + " g</b></span>";
+        subU.innerHTML = '<div class="subtop"><span class="subname">Location unknown</span></div>' +
+          '<div class="subfacts">' + res.unplaced.length +
+          (res.unplaced.length === 1 ? " run" : " runs") + ", mean " +
+          (rmsU / res.unplaced.length).toFixed(2) + " g</div>";
+        tintRow(subU);
         ul.appendChild(subU);
-        res.unplaced.forEach(function (r) { rideRow(r, ul, "Run " + runNo[r.id]); });
+        res.unplaced.forEach(function (r) { rideRow(r, ul, "Run " + runNo[r.id], tintRow); });
       }
     });
 
@@ -1865,11 +1997,67 @@ function gradeColor(g) {
                   Math.round(a[2] + (b[2] - a[2]) * m) + ")";
 }
 
+/* Cumulative distance is not the same as position. Ride a corner wide and your
+   odometer runs ahead of the run before, so by the bottom the two traces are offset
+   by tens of metres and the same rock garden no longer lines up.
+
+   So every run is projected onto one reference track: for each second, find the
+   nearest point on the reference and use ITS distance along the trail. The search is
+   restricted to a window ahead of the previous match, which stops a switchback that
+   passes close to itself from throwing the alignment backwards. */
+function buildReference(s2) {
+  var ref = [], run = 0, prev = null, i;
+  for (i = 0; i < s2.pts.length; i++) {
+    var p = s2.pts[i];
+    if (!hasFix(p)) continue;
+    if (prev) run += haversine(prev, p);
+    ref.push({ lat: p.lat, lon: p.lon, dist: run });
+    prev = p;
+  }
+  return ref;
+}
+
+function projectOnto(s2, ref, kx) {
+  var last = 0, i, j, offs = [];
+  for (i = 0; i < s2.pts.length; i++) {
+    var p = s2.pts[i];
+    if (!hasFix(p)) { p.x = null; continue; }
+    var lo = Math.max(0, last - 15), hi = Math.min(ref.length - 1, last + 150);
+    var best = last, bd = 1e18;
+    for (j = lo; j <= hi; j++) {
+      var dx = (ref[j].lon - p.lon) * kx, dy = ref[j].lat - p.lat;
+      var d2 = dx * dx + dy * dy;
+      if (d2 < bd) { bd = d2; best = j; }
+    }
+    last = best;
+    p.x = ref[best].dist;
+    offs.push(Math.sqrt(bd) * 111320);
+  }
+  offs.sort(function (a, b) { return a - b; });
+  return offs.length ? offs[Math.floor(offs.length / 2)] : null;
+}
+
+function alignSeries(series) {
+  var refRun = null, bestLen = -1;
+  series.forEach(function (s2) {
+    var n = s2.pts.filter(hasFix).length;
+    if (n > bestLen) { bestLen = n; refRun = s2; }
+  });
+  if (!refRun || bestLen < 3) return null;
+  var ref = buildReference(refRun);
+  if (ref.length < 3) return null;
+  var kx = Math.cos(ref[0].lat * Math.PI / 180);
+  var offs = series.map(function (s2) { return projectOnto(s2, ref, kx); });
+  return { length: ref[ref.length - 1].dist, offsets: offs };
+}
+
 /* The finger position, shared by both charts and the map. */
 var cmpState = { series: null, byDistance: false, maxX: 0, cursor: null, colorBy: "g" };
 
 function xOfPoint(s2, j) {
-  return cmpState.byDistance ? s2.pts[j].d : j;
+  if (!cmpState.byDistance) return j;
+  var p = s2.pts[j];
+  return (p.x !== null && p.x !== undefined) ? p.x : p.d;
 }
 
 function drawCursor(c, w, h) {
@@ -1888,7 +2076,7 @@ function drawAlt(series, byDistance) {
   var lo = 1e9, hi = -1e9, maxX = 0, any = false;
   series.forEach(function (s2) {
     s2.pts.forEach(function (p, k) {
-      var x = byDistance ? p.d : k;
+      var x = byDistance ? xOfPoint(s2, k) : k;
       if (x > maxX) maxX = x;
       if (p.alt === null) return;
       any = true;
@@ -1924,7 +2112,7 @@ function drawCompare(series, byDistance) {
   var maxX = 0, maxY = 0;
   series.forEach(function (s2) {
     s2.pts.forEach(function (p, k) {
-      var x = byDistance ? p.d : k;
+      var x = byDistance ? xOfPoint(s2, k) : k;
       if (x > maxX) maxX = x;
       if (p.r > maxY) maxY = p.r;
     });
@@ -1942,7 +2130,7 @@ function drawCompare(series, byDistance) {
     c.strokeStyle = s2.color; c.lineWidth = 1.8; c.lineJoin = "round";
     c.beginPath();
     for (j = 0; j < s2.pts.length; j++) {
-      var x = (byDistance ? s2.pts[j].d : j) / maxX * w;
+      var x = (byDistance ? xOfPoint(s2, j) : j) / maxX * w;
       var y = h - pad - (s2.pts[j].r / maxY) * (h - pad * 2);
       if (j === 0) c.moveTo(x, y); else c.lineTo(x, y);
     }
@@ -2297,14 +2485,23 @@ function openCompare(runs, label, runNo) {
     cmpState.series = series;
     cmpState.byDistance = byDistance;
     cmpState.cursor = null;
+    var align = byDistance ? alignSeries(series) : null;
     drawCompare(series, byDistance);
     drawAlt(series, byDistance);
     $("cmpAltCap").textContent =
       "Height along the same axis. Drag either chart to move the marker on the map.";
     $("cmpRead").textContent = "";
-    $("cmpCap").textContent = byDistance
-      ? "Roughness along the trail, second by second, against distance covered."
-      : "No usable GPS on these runs, so this is against time instead.";
+    $("cmpCap").textContent = !byDistance
+      ? "No usable GPS on these runs, so this is against time instead."
+      : align
+        ? "Roughness against position along the trail. Every run is matched to the same " +
+          "reference track, so the same place lines up whatever speed you rode it at." +
+          (align.offsets.filter(function (o) { return o !== null; }).length
+            ? " Runs sat within " +
+              Math.round(Math.max.apply(null, align.offsets.filter(function (o) { return o !== null; }))) +
+              " m of each other."
+            : "")
+        : "Roughness against distance covered.";
 
     drawCompareMap(series);
     series.forEach(function (s2) {
@@ -2559,135 +2756,38 @@ function fileBase(r) {
    alternatives rather than failing in silence. */
 var lastExport = null;
 
-function makeFile(blob, name, mime) {
-  try { return new File([blob], name, { type: mime }); } catch (e) { return null; }
-}
 
 /* iOS maps a filename extension to a system file type and refuses to share the ones
    it does not recognise, which is why a .json file throws TypeError. Walk a ladder
    of increasingly plain alternatives and hand back the first the phone will accept. */
-function shareLadder(name, mime) {
-  var dot = name.lastIndexOf(".");
-  var stem = dot > 0 ? name.slice(0, dot) : name;
-  var ext = dot > 0 ? name.slice(dot) : "";
-  return [
-    { n: name, m: mime },
-    { n: name, m: "text/plain" },
-    { n: stem + ext + ".txt", m: "text/plain" },
-    { n: stem + ".txt", m: "text/plain" },
-    { n: stem + ".csv", m: "text/csv" }
-  ];
-}
 
-function pickShareable(blob, name, mime) {
-  var lad = shareLadder(name, mime), i, f;
-  for (i = 0; i < lad.length; i++) {
-    f = makeFile(blob, lad[i].n, lad[i].m);
-    if (!f) continue;
-    if (!navigator.canShare) return f;
-    try { if (navigator.canShare({ files: [f] })) return f; } catch (e) { /* try next */ }
-  }
-  return null;
-}
 
 /* canShare is not always honest on iOS, so record what actually gets refused and
    skip it next time rather than making the person tap through the same failure. */
-var shareBlocked = {};
-function pickShareableSkipping(blob, name, mime) {
-  var lad = shareLadder(name, mime), i, f;
-  for (i = 0; i < lad.length; i++) {
-    if (shareBlocked[lad[i].m + "|" + lad[i].n.slice(lad[i].n.lastIndexOf("."))]) continue;
-    f = makeFile(blob, lad[i].n, lad[i].m);
-    if (!f) continue;
-    if (!navigator.canShare) return f;
-    try { if (navigator.canShare({ files: [f] })) return f; } catch (e) { /* try next */ }
-  }
-  return null;
-}
-function markBlocked(file) {
-  if (!file) return;
-  var d = file.name.lastIndexOf(".");
-  shareBlocked[file.type + "|" + (d > 0 ? file.name.slice(d) : "")] = true;
-}
 
 function deliver(name, parts, mime) {
-  var blob;
-  try {
-    blob = new Blob(parts, { type: mime + ";charset=utf-8" });
-  } catch (e) {
-    toast("Could not build the file: " + (e && e.message ? e.message : e));
-    return;
-  }
-  lastExport = { blob: blob, name: name, parts: parts, mime: mime };
-
-  if (!navigator.share) { showExport("this browser cannot share files"); return; }
-  var file = pickShareableSkipping(blob, name, mime);
-  if (!file) { showExport("iOS will not accept any file type we can build"); return; }
-
-  try {
-    var p = navigator.share({ files: [file] });
-    if (p && p.then) {
-      p.then(null, function (err) {
-        if (err && err.name === "AbortError") return;          // cancelled, all fine
-        markBlocked(file);
-        showExport("iOS refused a " + file.type + " file (" + (err && err.name ? err.name : err) + ")");
-      });
-    }
-  } catch (e) {
-    markBlocked(file);
-    showExport("iOS refused a " + file.type + " file (" + (e && e.name ? e.name : e) + ")");
-  }
+  var text;
+  try { text = parts.join(""); }
+  catch (e) { toast("Could not build the file: " + (e && e.message ? e.message : e)); return; }
+  lastExport = { name: name, parts: parts, text: text, mime: mime };
+  showExport(text.length);
 }
 
-function showExport(why, ok) {
+function showExport(chars) {
   if (!lastExport) return;
-  var kb = lastExport.blob.size / 1024;
+  var kb = chars / 1024, i;
   $("expName").textContent = lastExport.name;
-  $("expSize").textContent = kb > 1024 ? (kb / 1024).toFixed(2) + " MB" : kb.toFixed(0) + " KB";
-  $("expWhy").textContent = why;
-  $("expWhy").className = "rv " + (ok ? "ok" : "no");
-  $("expShare").classList.toggle("go", !!ok);
-  $("expCopy").classList.toggle("go", !ok);
-  var url = URL.createObjectURL(lastExport.blob);
-  $("expDl").href = url;
-  $("expDl").setAttribute("download", lastExport.name);
+  $("expSize").textContent = kb > 1024 ? (kb / 1024).toFixed(2) + " MB" : Math.round(kb) + " KB";
+  $("expWhy").textContent = "ready to copy";
+  $("expWhy").className = "rv ok";
   var head = "";
-  for (var i = 0; i < lastExport.parts.length && head.length < 4000; i++) head += lastExport.parts[i];
-  $("expText").value = head.slice(0, 4000) + (head.length > 4000 ? "\n... rest of the file omitted from this preview" : "");
+  for (i = 0; i < lastExport.parts.length && head.length < 4000; i++) head += lastExport.parts[i];
+  $("expText").value = head.slice(0, 4000) +
+    (lastExport.text.length > 4000 ? "\n... the rest is not shown here, but Copy takes all of it" : "");
   $("expSheet").classList.add("on");
 }
 $("expBack").onclick = function () { $("expSheet").classList.remove("on"); };
-$("expShare").onclick = function () {
-  if (!lastExport || !navigator.share) { toast("Sharing is not available here"); return; }
-  var f = pickShareableSkipping(lastExport.blob, lastExport.name, lastExport.mime);
-  if (!f) { toast("Every file type was refused. Use Copy instead."); return; }
-  try {
-    navigator.share({ files: [f] }).then(function () {
-      $("expSheet").classList.remove("on");
-    }, function (err) {
-      if (!err || err.name === "AbortError") return;
-      markBlocked(f);
-      $("expWhy").textContent = "refused " + f.type + " as " + f.name.slice(f.name.lastIndexOf("."));
-      toast("Refused again. Tap once more to try a plainer type, or use Copy.");
-    });
-  } catch (e) {
-    markBlocked(f);
-    toast("Refused again. Tap once more to try a plainer type, or use Copy.");
-  }
-};
-$("expShareText").onclick = function () {
-  if (!lastExport || !navigator.share) { toast("Sharing is not available here"); return; }
-  var text = lastExport.parts.join("");
-  if (text.length > 400000) { toast("Too long to send as a message. Use Copy."); return; }
-  try {
-    navigator.share({ text: text }).then(function () {
-      $("expSheet").classList.remove("on");
-    }, function (err) {
-      if (!err || err.name === "AbortError") return;
-      toast("Message share refused: " + (err && err.name ? err.name : err));
-    });
-  } catch (e) { toast("Message share threw " + (e && e.name ? e.name : e)); }
-};
+
 $("expCopy").onclick = function () {
   if (!lastExport) return;
   var text = lastExport.parts.join("");
