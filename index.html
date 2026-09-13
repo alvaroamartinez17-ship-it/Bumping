@@ -932,7 +932,7 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.26";
+var VERSION = "1.27";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
@@ -1795,13 +1795,25 @@ function buildCompareSeries(r, chunks) {
   return out;
 }
 
+/* Smooths the roughness only. It used to rebuild each point as {d, r} and drop the
+   coordinates, which left every lat as undefined. undefined is not null, so the
+   guards below let it through and both the overlay and the map were handed NaN. */
 function smooth3(vals) {
   var out = [], i;
   for (i = 0; i < vals.length; i++) {
     var a = vals[Math.max(0, i - 1)].r, b = vals[i].r, c = vals[Math.min(vals.length - 1, i + 1)].r;
-    out.push({ d: vals[i].d, r: (a + b + c) / 3 });
+    out.push({
+      d: vals[i].d, r: (a + b + c) / 3,
+      lat: vals[i].lat, lon: vals[i].lon
+    });
   }
   return out;
+}
+
+function hasFix(p) {
+  return p && p.lat !== null && p.lat !== undefined &&
+         p.lon !== null && p.lon !== undefined &&
+         !isNaN(p.lat) && !isNaN(p.lon);
 }
 
 function drawCompare(series, byDistance) {
@@ -1854,7 +1866,7 @@ function drawCompareMap(series) {
   var minLa = 90, maxLa = -90, minLo = 180, maxLo = -180, any = false, maxR = 0;
   series.forEach(function (s2) {
     s2.pts.forEach(function (p) {
-      if (p.lat === null) return;
+      if (!hasFix(p)) return;
       any = true;
       if (p.lat < minLa) minLa = p.lat;
       if (p.lat > maxLa) maxLa = p.lat;
@@ -1876,12 +1888,12 @@ function drawCompareMap(series) {
     c.strokeStyle = s2.color;
     for (j = 1; j < s2.pts.length; j++) {
       var a = s2.pts[j - 1], b = s2.pts[j];
-      if (a.lat === null || b.lat === null) continue;
+      if (!hasFix(a) || !hasFix(b)) continue;
       c.lineWidth = 1 + (maxR ? (b.r / maxR) : 0) * 5;
       c.beginPath(); c.moveTo(px(a), py(a)); c.lineTo(px(b), py(b)); c.stroke();
     }
     var st = null;
-    for (j = 0; j < s2.pts.length; j++) { if (s2.pts[j].lat !== null) { st = s2.pts[j]; break; } }
+    for (j = 0; j < s2.pts.length; j++) { if (hasFix(s2.pts[j])) { st = s2.pts[j]; break; } }
     if (st) { c.fillStyle = s2.color; c.beginPath(); c.arc(px(st), py(st), 4, 0, 6.2832); c.fill(); }
   });
   c.fillStyle = "#998C79"; c.font = "11px -apple-system,sans-serif";
@@ -1927,7 +1939,7 @@ function openMapFor(series, title) {
   }).join("");
 
   var any = series.some(function (s2) {
-    return s2.pts.some(function (p) { return p.lat !== null; });
+    return s2.pts.some(hasFix);
   });
   if (!any) { $("mapCap").textContent = "No GPS on this run, so there is nothing to place."; return; }
   if (navigator.onLine === false) {
@@ -1941,7 +1953,7 @@ function openMapFor(series, title) {
       maxBounds: BW_BOUNDS, maxBoundsViscosity: 0.8,
       minZoom: 10, maxZoom: 19, zoomControl: true, attributionControl: true
     });
-    L.tileLayer(LGL_WMTS, {
+    var tiles = L.tileLayer(LGL_WMTS, {
       maxZoom: 19, minZoom: 10, bounds: BW_BOUNDS,
       attribution: "LGL-BW, dl-de/by-2.0"
     }).addTo(theMap);
@@ -1953,7 +1965,7 @@ function openMapFor(series, title) {
     series.forEach(function (s2) {
       var prev = null;
       s2.pts.forEach(function (p) {
-        if (p.lat === null) return;
+        if (!hasFix(p)) return;
         if (prev) {
           L.polyline([[prev.lat, prev.lon], [p.lat, p.lon]], {
             color: s2.color,
@@ -1965,9 +1977,25 @@ function openMapFor(series, title) {
         prev = p;
       });
     });
+    if (all.length < 2) {
+      $("mapCap").textContent = "Not enough positions to place this run.";
+      return;
+    }
     theMap.fitBounds(L.latLngBounds(all).pad(0.15));
     setTimeout(function () { theMap.invalidateSize(); }, 60);
     $("mapCap").textContent = "Thicker line means higher g. Pinch or use the buttons to zoom.";
+
+    /* If the imagery itself will not load, the track still draws on grey. Say which
+       of the two failed rather than leaving it ambiguous. */
+    var bad = 0, good = 0;
+    tiles.on("tileerror", function () {
+      bad++;
+      if (bad > 3 && !good) {
+        $("mapCap").textContent =
+          "Track drawn, but the aerial tiles were refused. The imagery URL needs adjusting.";
+      }
+    });
+    tiles.on("tileload", function () { good++; });
   }).catch(function (e) {
     $("mapCap").textContent = "Imagery unavailable: " + (e && e.message ? e.message : e);
   });
@@ -2134,7 +2162,7 @@ function loadRide(r) {
     openPts = pts;
     // coarse fixes are kept in the export but would wreck the drawn track
     var clean = pts.filter(function (q) {
-      return q.acc === null || q.acc === undefined || q.acc <= GPS_USE_ACC;
+      return (q.acc === null || q.acc === undefined || q.acc <= GPS_USE_ACC) && hasFix(q);
     });
 
     var dur = Math.max(r.dur || 0, 1);
