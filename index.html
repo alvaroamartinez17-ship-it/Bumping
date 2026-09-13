@@ -414,6 +414,7 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
     <div id="mapBox"></div>
     <p class="plotcap" id="mapCap"></p>
     <div class="legend" id="mapLegend"></div>
+    <div class="btnrow"><button class="big" id="mapNext">Try the next imagery source</button></div>
     <div class="tip">
       <p>Aerial imagery is only fetched when you are online, and only covers
       Baden-Wuerttemberg. Line thickness is the g force at that point.</p>
@@ -933,7 +934,7 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.28";
+var VERSION = "1.29";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
@@ -1905,10 +1906,45 @@ function drawCompareMap(series) {
    under dl-de/by-2.0. The tile matrix set is GoogleMapsCompatible, i.e. ordinary Web
    Mercator, so Leaflet needs no projection shim. Loaded on demand and only when
    online, because none of this works in a forest. */
-var LGL_WMTS = "https://owsproxy.lgl-bw.de/owsproxy/ows/WMTS_LGL-BW_ATKIS_DOP_20_C" +
-  "?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=DOP_20_C&STYLE=default" +
-  "&TILEMATRIXSET=GoogleMapsCompatible&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}" +
-  "&FORMAT=image/png";
+var LGL_BASE = "https://owsproxy.lgl-bw.de/owsproxy/ows/";
+
+/* I cannot query the LGL service from here to learn the exact tile addressing it
+   wants, and guessing wrong gives a blank map. So the app tries each known form in
+   turn, keeps the first that actually returns tiles, and remembers it. The last
+   entry is a plain street map: not aerial, but it proves the map itself works. */
+var IMAGERY = [
+  { name: "LGL aerial, WMTS", kind: "tile",
+    url: LGL_BASE + "WMTS_LGL-BW_ATKIS_DOP_20_C?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0" +
+         "&LAYER=DOP_20_C&STYLE=default&TILEMATRIXSET=GoogleMapsCompatible" +
+         "&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png",
+    credit: "LGL-BW, dl-de/by-2.0" },
+  { name: "LGL aerial, WMTS prefixed", kind: "tile",
+    url: LGL_BASE + "WMTS_LGL-BW_ATKIS_DOP_20_C?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0" +
+         "&LAYER=DOP_20_C&STYLE=default&TILEMATRIXSET=GoogleMapsCompatible" +
+         "&TILEMATRIX=GoogleMapsCompatible%3A{z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png",
+    credit: "LGL-BW, dl-de/by-2.0" },
+  { name: "LGL aerial, WMTS jpeg", kind: "tile",
+    url: LGL_BASE + "WMTS_LGL-BW_ATKIS_DOP_20_C?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0" +
+         "&LAYER=DOP_20_C&STYLE=default&TILEMATRIXSET=GoogleMapsCompatible" +
+         "&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/jpeg",
+    credit: "LGL-BW, dl-de/by-2.0" },
+  { name: "LGL aerial, WMTS rest", kind: "tile",
+    url: LGL_BASE + "WMTS_LGL-BW_ATKIS_DOP_20_C/DOP_20_C/default/GoogleMapsCompatible/{z}/{y}/{x}.png",
+    credit: "LGL-BW, dl-de/by-2.0" },
+  { name: "LGL aerial, WMS", kind: "wms",
+    url: LGL_BASE + "WMS_LGL-BW_ATKIS_DOP_20_C",
+    layers: "DOP_20_C", credit: "LGL-BW, dl-de/by-2.0" },
+  { name: "Street map, not aerial", kind: "tile",
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    credit: "OpenStreetMap contributors" }
+];
+function imageryPref() {
+  try { return parseInt(localStorage.getItem("bumplogImagery"), 10) || 0; } catch (e) { return 0; }
+}
+function setImageryPref(i) {
+  try { localStorage.setItem("bumplogImagery", i); } catch (e) { /* private mode */ }
+}
+
 var BW_BOUNDS = [[47.40, 7.30], [49.90, 10.60]];
 var leafletReady = null, theMap = null, mapLayers = [];
 
@@ -1956,10 +1992,51 @@ function openMapFor(series, title) {
       maxBounds: BW_BOUNDS, maxBoundsViscosity: 0.8,
       minZoom: 10, maxZoom: 19, zoomControl: true, attributionControl: true
     });
-    var tiles = L.tileLayer(LGL_WMTS, {
-      maxZoom: 19, minZoom: 10, bounds: BW_BOUNDS,
-      attribution: "LGL-BW, dl-de/by-2.0"
-    }).addTo(theMap);
+    var layer = null, trying = imageryPref(), giveUp = false;
+
+    function makeLayer(spec) {
+      var opts = { maxZoom: 19, minZoom: 10, bounds: BW_BOUNDS, attribution: spec.credit };
+      if (spec.kind === "wms") {
+        return L.tileLayer.wms(spec.url, {
+          layers: spec.layers, format: "image/png", transparent: false,
+          maxZoom: 19, minZoom: 10, attribution: spec.credit
+        });
+      }
+      return L.tileLayer(spec.url, opts);
+    }
+
+    function trySource(i) {
+      if (i >= IMAGERY.length) {
+        giveUp = true;
+        $("mapCap").textContent = "Track drawn. No imagery source would load.";
+        return;
+      }
+      trying = i;
+      var spec = IMAGERY[i];
+      if (layer) { theMap.removeLayer(layer); layer = null; }
+      var good = 0, bad = 0, settled = false;
+      layer = makeLayer(spec);
+      layer.on("tileload", function () {
+        good++;
+        if (!settled) {
+          settled = true;
+          setImageryPref(i);
+          $("mapCap").textContent = "Imagery: " + spec.name + ". Thicker line means higher g.";
+        }
+      });
+      layer.on("tileerror", function () { bad++; });
+      layer.addTo(theMap);
+      $("mapCap").textContent = "Trying " + spec.name;
+      setTimeout(function () {
+        if (settled || giveUp) return;
+        if (good === 0) trySource(i + 1);
+      }, 4000);
+    }
+    $("mapNext").onclick = function () {
+      if (!theMap) return;
+      giveUp = false;
+      trySource((trying + 1) % IMAGERY.length);
+    };
 
     var maxR = 0, all = [];
     series.forEach(function (s2) {
@@ -1980,26 +2057,17 @@ function openMapFor(series, title) {
         prev = p;
       });
     });
-    $("mapCap").textContent = "Placed " + all.length + " positions, requesting imagery";
     if (all.length < 2) {
       $("mapCap").textContent = "Only " + all.length + " usable positions, cannot place this run.";
       return;
     }
     theMap.fitBounds(L.latLngBounds(all).pad(0.15));
     setTimeout(function () { theMap.invalidateSize(); }, 60);
+    trySource(trying);
     $("mapCap").textContent = "Thicker line means higher g. Pinch or use the buttons to zoom.";
 
     /* If the imagery itself will not load, the track still draws on grey. Say which
        of the two failed rather than leaving it ambiguous. */
-    var bad = 0, good = 0;
-    function status() {
-      $("mapCap").textContent = "Track drawn from " + all.length + " positions. " +
-        "Tiles: " + good + " loaded, " + bad + " refused." +
-        (good ? "" : bad > 2 ? " The imagery URL needs adjusting." : " Waiting.");
-    }
-    tiles.on("tileerror", function () { bad++; status(); });
-    tiles.on("tileload", function () { good++; status(); });
-    setTimeout(status, 2500);
   }).catch(function (e) {
     $("mapCap").textContent = "Imagery unavailable: " + (e && e.message ? e.message : e);
   });
