@@ -363,6 +363,12 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
     <ul class="list" id="rideList"></ul>
   </section>
 
+  <!-- ============ TRAILS ============ -->
+  <section class="screen" id="scTrails">
+    <div class="head"><h2>Trails</h2><span class="sub" id="trailsSub" style="margin-left:auto"></span></div>
+    <ul class="list" id="trailList"></ul>
+  </section>
+
   <!-- ============ SETUP ============ -->
   <section class="screen" id="scSetup">
     <div class="head"><h2>Setup</h2><span class="sub" id="verSub"></span></div>
@@ -370,6 +376,9 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
     <div class="rows">
       <div class="row"><span>Motion sensor</span><span class="rv" id="sMotion"></span></div>
       <div class="row"><span>Readings per second</span><span class="rv" id="sHz"></span></div>
+      <div class="row"><span>Sensor route</span><span class="rv" id="sRoute"></span></div>
+      <div class="row"><span>Screen can be held awake</span><span class="rv" id="sWake"></span></div>
+      <div class="row"><span>Bluetooth available</span><span class="rv" id="sBle"></span></div>
       <div class="row"><span>Live reading</span><span class="rv" id="sRaw"></span></div>
       <div class="row"><span>Gyroscope</span><span class="rv" id="sRot"></span></div>
       <div class="row"><span>Gravity separation</span><span class="rv" id="sLin"></span></div>
@@ -408,6 +417,7 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
   <nav class="tabs">
     <button class="tab on" data-go="scRec">Record</button>
     <button class="tab" data-go="scRides">Sessions <span class="badge" id="tabCount"></span></button>
+    <button class="tab" data-go="scTrails">Trails <span class="badge" id="tabTrails"></span></button>
     <button class="tab" data-go="scSetup">Setup</button>
   </nav>
 </div>
@@ -546,6 +556,7 @@ a.big{display:block;text-decoration:none;color:var(--cream)}
     </div>
     <div class="btnrow">
       <button class="big go" id="expCopy">Copy all of it</button>
+      <button class="big" id="expSave" style="display:none">Save as a file</button>
     </div>
     <div class="tip">
       <p>Copy puts the whole file on the clipboard. Paste it into Notes, an email, or
@@ -780,23 +791,26 @@ function resetRecorder() {
   R.hzCount = 0; R.hz = 0; R.gaps = 0;
 }
 
+/* Safari hands samples over through devicemotion at a fixed 60 Hz. Chrome exposes
+   the sensors directly and lets the page ask for a rate. Both end up here. */
 function onMotion(e) {
-  mEvents++;
   var a = e.accelerationIncludingGravity;
-  if (!a || a.x === null || a.x === undefined) { mEmpty++; return; }
+  if (!a || a.x === null || a.x === undefined) { mEvents++; mEmpty++; return; }
+  pushSample(a.x, a.y, a.z, e.acceleration, e.rotationRate);
+}
+
+function pushSample(x, y, z, lin, rot) {
+  mEvents++;
   if (!motionReady) {
     motionReady = true;
     setDot($("dMotion"), "live", "Motion live", $("tMotion"));
     $("chipMotion").classList.remove("tapme");
   }
-  lastRaw = { x: a.x, y: a.y, z: a.z };
+  lastRaw = { x: x, y: y, z: z };
   var t = performance.now() - R.perf0;
-  var x = a.x, y = a.y, z = a.z;
 
-  var lin = e.acceleration;
   var haveLin = !!(lin && lin.x !== null && lin.x !== undefined);
   if (haveLin) hasLin = true;
-  var rot = e.rotationRate;
   var haveRot = !!(rot && rot.alpha !== null && rot.alpha !== undefined);
   if (haveRot) hasRot = true;
 
@@ -994,17 +1008,73 @@ function flushGps() {
 function pad6(n) { return ("00000" + n).slice(-6); }
 
 /* ------------------------------------------------------- sensor access */
-var VERSION = "1.35";
+var VERSION = "1.37";
 var motionAttached = false, motionReady = false, motionNote = "starting";
 var mEvents = 0, mEmpty = 0, lastRaw = null, gpsWatch = null, gpsNote = "off";
 var hasLin = false, hasRot = false, lastSplit = null;
 var gpsErrs = 0, gpsRestarts = 0, lastFixAt = 0, gpsRetryT = null,
     gpsDead = false;
 
+/* Chrome's Generic Sensor API. The iPhone has none of these, so the check simply
+   fails there and the devicemotion path is used instead. Asking for 200 Hz lifts the
+   usable bandwidth from 30 Hz to about 100, which is where tyre and frame buzz lives. */
+var SAMPLE_HZ = 200;
+var genSensors = null, sensorSource = "none";
+
+function startGenericSensors() {
+  if (typeof Accelerometer === "undefined") return false;
+  try {
+    var acc = new Accelerometer({ frequency: SAMPLE_HZ, referenceFrame: "device" });
+    var lin = null, gyr = null;
+    if (typeof LinearAccelerationSensor !== "undefined") {
+      lin = new LinearAccelerationSensor({ frequency: SAMPLE_HZ });
+    }
+    if (typeof Gyroscope !== "undefined") {
+      gyr = new Gyroscope({ frequency: SAMPLE_HZ });
+    }
+    acc.onerror = function (ev) {
+      sensorSource = "blocked: " + (ev.error && ev.error.name ? ev.error.name : "unknown");
+      motionNote = sensorSource;
+    };
+    acc.onreading = function () {
+      pushSample(acc.x, acc.y, acc.z,
+        lin && lin.x !== null ? { x: lin.x, y: lin.y, z: lin.z } : null,
+        gyr && gyr.x !== null
+          ? { alpha: gyr.z * 57.2958, beta: gyr.x * 57.2958, gamma: gyr.y * 57.2958 }
+          : null);
+    };
+    if (lin) { lin.onerror = function () { lin = null; }; lin.start(); }
+    if (gyr) { gyr.onerror = function () { gyr = null; }; gyr.start(); }
+    acc.start();
+    genSensors = { acc: acc, lin: lin, gyr: gyr };
+    sensorSource = "Chrome sensors at " + SAMPLE_HZ + " Hz";
+    return true;
+  } catch (e) {
+    sensorSource = "sensor start failed: " + (e && e.name ? e.name : e);
+    return false;
+  }
+}
+
 function attachMotion() {
   if (motionAttached) return;
+  if (startGenericSensors()) { motionAttached = true; return; }
   window.addEventListener("devicemotion", onMotion, false);
+  sensorSource = "devicemotion, whatever rate the browser gives";
   motionAttached = true;
+}
+
+/* Chrome can hold the screen awake. On iOS this simply does not exist and the
+   Auto-Lock note in Setup still applies. */
+var wakeLock = null;
+function holdScreenAwake() {
+  if (!navigator.wakeLock || wakeLock) return;
+  navigator.wakeLock.request("screen").then(function (w) {
+    wakeLock = w;
+    w.addEventListener("release", function () { wakeLock = null; });
+  }).catch(function () { /* denied, the Auto-Lock note covers it */ });
+}
+function releaseScreen() {
+  if (wakeLock) { try { wakeLock.release(); } catch (e) { /* gone */ } wakeLock = null; }
 }
 
 /* Attach on load, then see whether anything actually arrives. iOS only delivers
@@ -1182,6 +1252,7 @@ function start() {
     R.perf0 = performance.now();
     R.flushT = 0;
     R.on = true;
+    holdScreenAwake();
     $("btnRec").classList.add("stop");
     $("recLabel").textContent = "Stop recording";
     $("clock").classList.remove("idle");
@@ -1192,6 +1263,7 @@ function start() {
 
 function stop() {
   R.on = false;
+  releaseScreen();
   flushAccel(); flushGps();
   if (R.secBucketN) R.rough.push(Math.round(Math.sqrt(R.secBucketSq / R.secBucketN) * 1000) / 1000);
   var ride = {
@@ -1858,6 +1930,41 @@ function clusterByPlace(list) {
   return { trails: trails, unplaced: unplaced };
 }
 
+/* Trails are worked out across every run ever recorded, not within a day, so the
+   same piece of trail keeps its number whichever session you rode it in. That is
+   what makes comparing a run from today against one from last week possible. */
+function globalTrails() {
+  var asc = rides.slice().sort(function (a, b) { return a.startedAt - b.startedAt; });
+  var cl = clusterByPlace(asc);
+  var numberOf = {}, runsOf = {};
+  cl.trails.forEach(function (runs, i) {
+    runsOf[i + 1] = runs;
+    runs.forEach(function (r) { numberOf[r.id] = i + 1; });
+  });
+  cl.unplaced.forEach(function (r) { numberOf[r.id] = 0; });
+  return { numberOf: numberOf, runsOf: runsOf, count: cl.trails.length,
+           unplaced: cl.unplaced };
+}
+
+/* "S2 run 4" reads the same in every view. */
+function runLabels() {
+  var sess = sessionNumbers(), byDay = {}, out = {};
+  rides.forEach(function (r) {
+    var k = dayKey(r.startedAt);
+    if (!byDay[k]) byDay[k] = [];
+    byDay[k].push(r);
+  });
+  Object.keys(byDay).forEach(function (k) {
+    byDay[k].sort(function (a, b) { return a.startedAt - b.startedAt; });
+    byDay[k].forEach(function (r, i) {
+      out[r.id] = { session: sess[k], run: i + 1,
+                    short: "Run " + (i + 1),
+                    full: "S" + sess[k] + " run " + (i + 1) };
+    });
+  });
+  return out;
+}
+
 function sessionNumbers() {
   var days = {}, keys = [];
   rides.forEach(function (r) {
@@ -1913,6 +2020,7 @@ function renderRides() {
     }
 
     var sess = sessionNumbers();
+    var GT = globalTrails(), LB = runLabels();
     var byDay = {}, dayOrder = [];
     rides.forEach(function (r) {
       var k = dayKey(r.startedAt);
@@ -1949,7 +2057,17 @@ function renderRides() {
       var asc = group.slice().sort(function (a, b) { return a.startedAt - b.startedAt; });
       var runNo = {};
       asc.forEach(function (r, i) { runNo[r.id] = i + 1; });
-      var res = clusterByPlace(asc);
+
+      /* group this day's runs by their global trail number */
+      var byTrail = {}, trailOrder = [], loose = [];
+      asc.forEach(function (r) {
+        var t = GT.numberOf[r.id];
+        if (!t) { loose.push(r); return; }
+        if (!byTrail[t]) { byTrail[t] = []; trailOrder.push(t); }
+        byTrail[t].push(r);
+      });
+      var res = { trails: trailOrder.map(function (t) { return byTrail[t]; }),
+                  unplaced: loose, nums: trailOrder };
 
       function tintRow(li) {
         li.className += " tinted";
@@ -1957,20 +2075,28 @@ function renderRides() {
       }
 
       res.trails.forEach(function (runs, idx) {
+        var tn = res.nums[idx];
+        var all = GT.runsOf[tn] || runs;
         var rms = 0, n2 = 0;
         runs.forEach(function (r) { rms += r.movRms || r.rms || 0; n2++; });
         var sub = document.createElement("li");
         sub.className = "sub";
         var top = document.createElement("div");
         top.className = "subtop";
-        top.innerHTML = '<span class="subname">Trail ' + (idx + 1) + "</span>";
+        top.innerHTML = '<span class="subname">Trail ' + tn + "</span>";
         if (runs.length > 1) {
           var cmp = document.createElement("button");
-          cmp.textContent = "Compare " + runs.length + " runs";
+          cmp.textContent = "Compare " + runs.length;
           cmp.onclick = function () {
-            openCompare(runs, runs.length + " runs on trail " + (idx + 1), runNo);
+            openCompare(runs, runs.length + " runs on trail " + tn, LB, "short");
           };
           top.appendChild(cmp);
+        }
+        if (all.length > runs.length) {
+          var cmpAll = document.createElement("button");
+          cmpAll.textContent = "All " + all.length;
+          cmpAll.onclick = function () { compareTrail(tn); };
+          top.appendChild(cmpAll);
         }
         var killT = document.createElement("button");
         killT.className = "kill";
@@ -1980,9 +2106,10 @@ function renderRides() {
         sub.appendChild(top);
         var facts = document.createElement("div");
         facts.className = "subfacts";
+        var elsewhere = (GT.runsOf[tn] || []).length - runs.length;
         facts.textContent = runs.length + (runs.length === 1 ? " run" : " runs") +
-          ", mean " + (rms / n2).toFixed(2) + " g, from " +
-          runs[0].anchorLat.toFixed(4) + " " + runs[0].anchorLon.toFixed(4);
+          ", mean " + (rms / n2).toFixed(2) + " g" +
+          (elsewhere > 0 ? ", " + elsewhere + " more on other sessions" : "");
         sub.appendChild(facts);
         tintRow(sub);
         ul.appendChild(sub);
@@ -2010,6 +2137,95 @@ function renderRides() {
     paintDeleteState();
     $("ridesSub").textContent = (totD / 1000).toFixed(1) + " km, " +
       (totS / 1000).toFixed(0) + "k samples";
+  });
+}
+
+/* Every trail, with every run ever ridden on it, whatever session it came from. */
+function compareTrail(tn) {
+  var GT = globalTrails(), LB = runLabels();
+  var runs = (GT.runsOf[tn] || []).slice()
+    .sort(function (a, b) { return b.startedAt - a.startedAt; })
+    .slice(0, CMP_COLORS.length)
+    .sort(function (a, b) { return a.startedAt - b.startedAt; });
+  if (runs.length < 2) { toast("Only one run on that trail so far"); return; }
+  openCompare(runs, runs.length + " runs on trail " + tn, LB, "full");
+}
+
+function renderTrails() {
+  return getAll("rides").then(function (rows) {
+    rides = rows.filter(function (r) { return !r.open; })
+                .sort(function (a, b) { return b.startedAt - a.startedAt; });
+    return ensureGeo(rides);
+  }).then(function () {
+    var GT = globalTrails(), LB = runLabels(), sess = sessionNumbers();
+    var ul = $("trailList");
+    ul.innerHTML = "";
+    $("tabTrails").textContent = GT.count ? GT.count : "";
+    if (!GT.count) {
+      ul.innerHTML = '<li class="empty"><b>No trails yet</b>' +
+        'A trail appears once a run has a usable GPS position. Ride the same place ' +
+        'twice and both runs land here together, whatever day you rode them.</li>';
+      $("trailsSub").textContent = "";
+      return;
+    }
+
+    var order = Object.keys(GT.runsOf).sort(function (a, b) { return a - b; });
+    var multi = 0;
+    order.forEach(function (tn) {
+      var runs = GT.runsOf[tn].slice().sort(function (a, b) { return a.startedAt - b.startedAt; });
+      var days = {}, rms = 0, dist = 0;
+      runs.forEach(function (r) {
+        days[dayKey(r.startedAt)] = 1;
+        rms += r.movRms || r.rms || 0;
+        dist += r.dist || 0;
+      });
+      var nDays = Object.keys(days).length;
+      if (runs.length > 1) multi++;
+
+      var head = document.createElement("li");
+      head.className = "sub";
+      var top = document.createElement("div");
+      top.className = "subtop";
+      top.innerHTML = '<span class="subname">Trail ' + tn + "</span>";
+      if (runs.length > 1) {
+        var cmp = document.createElement("button");
+        cmp.textContent = "Compare " + Math.min(runs.length, CMP_COLORS.length);
+        cmp.onclick = function () { compareTrail(tn); };
+        top.appendChild(cmp);
+      }
+      head.appendChild(top);
+      var f = document.createElement("div");
+      f.className = "subfacts";
+      f.textContent = runs.length + (runs.length === 1 ? " run" : " runs") +
+        " across " + nDays + (nDays === 1 ? " session" : " sessions") +
+        ", mean " + (rms / runs.length).toFixed(2) + " g, " +
+        (dist / runs.length / 1000).toFixed(2) + " km each";
+      head.appendChild(f);
+      ul.appendChild(head);
+
+      runs.slice().reverse().forEach(function (r, i) {
+        var L = LB[r.id] || { full: "run" };
+        var li = document.createElement("li");
+        var b = document.createElement("button");
+        b.className = "ride";
+        b.innerHTML = '<span><span class="when"></span><span class="facts"></span></span><canvas></canvas>';
+        b.querySelector(".when").textContent = L.full;
+        b.querySelector(".facts").innerHTML =
+          dateLabel(r.startedAt) + "<i>|</i>" +
+          hms((r.movSec ? r.movSec * 1000 : r.dur) || 0) + "<i>|</i>" +
+          (r.drop || 0) + " m down<i>|</i>" +
+          (r.movRms || r.rms || 0).toFixed(2) + " g";
+        b.onclick = function () { openRide(r); };
+        li.appendChild(b);
+        li.className = "inTrail";
+        var tint = SESSION_TINTS[((L.session || 1) - 1) % SESSION_TINTS.length];
+        li.style.borderLeft = "3px solid " + tint;
+        if (i === runs.length - 1) li.className += " lastInTrail";
+        ul.appendChild(li);
+        drawSpark(b.querySelector("canvas"), r.rough);
+      });
+    });
+    $("trailsSub").textContent = GT.count + " trails, " + multi + " ridden more than once";
   });
 }
 
@@ -2550,7 +2766,7 @@ $("mapBack").onclick = function () {
   disposeMap("mapBox");
 };
 
-function openCompare(runs, label, runNo) {
+function openCompare(runs, label, labels, which) {
   $("cmpTitle").textContent = label;
   $("cmpLegend").innerHTML = "";
   $("cmpRows").innerHTML = "";
@@ -2594,7 +2810,8 @@ function openCompare(runs, label, runNo) {
 
     drawCompareMap(series);
     series.forEach(function (s2) {
-      s2.name = "Run " + ((runNo && runNo[s2.ride.id]) || "");
+      var L = labels && labels[s2.ride.id];
+      s2.name = L ? (which === "short" ? L.short : L.full) : "Run";
     });
     if (navigator.onLine !== false) {
       $("cmpMapPlot").style.display = "none";
@@ -2627,9 +2844,8 @@ function openCompare(runs, label, runNo) {
       : "";
 
     $("cmpLegend").innerHTML = series.map(function (s2) {
-      var n = (runNo && runNo[s2.ride.id]) || "";
-      return '<span><i style="background:' + s2.color + '"></i>Run ' + n + ", " +
-             (dateLabel(s2.ride.startedAt).split(", ")[1] || "") + "</span>";
+      return '<span><i style="background:' + s2.color + '"></i>' + s2.name + ", " +
+             dateLabel(s2.ride.startedAt) + "</span>";
     }).join("");
 
     var rowsHtml = "";
@@ -2873,8 +3089,29 @@ function showExport(chars) {
   for (i = 0; i < lastExport.parts.length && head.length < 4000; i++) head += lastExport.parts[i];
   $("expText").value = head.slice(0, 4000) +
     (lastExport.text.length > 4000 ? "\n... the rest is not shown here, but Copy takes all of it" : "");
+  /* Chrome has a download manager, iOS does not. Only offer it where it works. */
+  var canSave = !!(window.Blob && document.createElement("a").download !== undefined &&
+                   !navigator.standalone);
+  $("expSave").style.display = canSave ? "block" : "none";
   $("expSheet").classList.add("on");
 }
+$("expSave").onclick = function () {
+  if (!lastExport) return;
+  try {
+    var blob = new Blob(lastExport.parts, { type: (lastExport.mime || "text/plain") + ";charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = lastExport.name; a.rel = "noopener";
+    document.body.appendChild(a); a.click();
+    setTimeout(function () {
+      if (a.parentNode) document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 8000);
+    toast("Saved " + lastExport.name);
+  } catch (e) {
+    toast("Save failed: " + (e && e.message ? e.message : e) + ". Use Copy.");
+  }
+};
 $("expBack").onclick = function () { $("expSheet").classList.remove("on"); };
 
 $("expCopy").onclick = function () {
@@ -3510,6 +3747,12 @@ function renderSetup() {
   $("sHz").textContent = R.hz + " Hz";
   $("sHz").className = "rv " + (R.hz > 5 ? "ok" : "no");
 
+  var rt = $("sRoute");
+  rt.textContent = sensorSource;
+  rt.className = "rv " + (sensorSource.indexOf("Chrome") === 0 ? "ok" : "");
+  yn($("sWake"), !!navigator.wakeLock, "yes", "no, set Auto-Lock to Never");
+  yn($("sBle"), !!navigator.bluetooth, "yes", "no");
+
   var raw = $("sRaw");
   if (lastRaw) {
     raw.textContent = "x " + lastRaw.x.toFixed(2) + ", y " + lastRaw.y.toFixed(2) +
@@ -3628,6 +3871,7 @@ Array.prototype.slice.call(document.querySelectorAll(".tab")).forEach(function (
     var id = t.getAttribute("data-go");
     go(id);
     if (id === "scRides") renderRides();   // sparklines need a visible, sized canvas
+    if (id === "scTrails") renderTrails();
     if (id === "scSetup") renderSetup();
   };
 });
@@ -3663,9 +3907,11 @@ window.addEventListener("unhandledrejection", function (e) {
 });
 
 /* --------------------------------------------------------------- boot */
-$("note").innerHTML =
-  "Before the first run, set Auto-Lock to Never in Settings, Display &amp; Brightness. " +
-  "iOS stops the sensors the moment the screen sleeps, and this app has no way around that.";
+$("note").innerHTML = navigator.wakeLock
+  ? "This browser can hold the screen awake while recording, so there is nothing to set up."
+  : "Before the first run, set Auto-Lock to Never in Settings, Display &amp; Brightness. " +
+    "iOS stops the sensors the moment the screen sleeps, and this app has no way around that.";
+if (navigator.wakeLock) $("note").classList.add("hide");
 
 openDB().then(function () {
   // a reload or crash mid-ride leaves a placeholder behind; clear it and its chunks
